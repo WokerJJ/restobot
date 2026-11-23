@@ -70,7 +70,7 @@ function findItemByText(restaurant, t) {
 function greeting(restaurant, name) {
   const hi = name ? `¡Hola, ${clip(name, 30)}! 👋` : '¡Hola! 👋';
   const body = `${hi} Bienvenido a ${restaurant.name}.` +
-    (restaurant.hours ? `\nHorario: ${restaurant.hours}.` : '') +
+    (restaurant.hours ? `\nHorario: ${restaurant.hours.replace(/\.$/, '')}.` : '') +
     '\n\n¿Qué quieres hacer?';
   return [{ kind: 'buttons', body, buttons: [{ id: 'menu', title: 'Hacer pedido' }, HUMAN_BUTTON] }];
 }
