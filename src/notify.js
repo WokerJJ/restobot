@@ -40,7 +40,10 @@ export function createHandoffNotifier({ url, restaurantName, fetch: fetchImpl = 
           event: 'derivacion', restaurant: restaurantName, customer, reason, cartItems,
           at: new Date(at).toISOString(), text, content: text
         }),
-        signal: AbortSignal.timeout(timeoutMs)
+        signal: AbortSignal.timeout(timeoutMs),
+        // checkUrl solo valida la URL configurada: si fetch siguiera un 30x, el teléfono podría
+        // salir por http o hacia otro host. Una redirección se trata como fallo del aviso.
+        redirect: 'error'
       });
       if (!res.ok) throw new Error(`respondió ${res.status}`);
       return true;

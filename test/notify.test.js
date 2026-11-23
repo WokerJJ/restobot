@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import { createHandoffNotifier } from '../src/notify.js';
 
 const CLIENTE = '573001112233';
@@ -61,4 +63,30 @@ test('exige una URL https válida (http solo en localhost)', () => {
   assert.throws(() => crear('ftp://hooks.example.com/x'), /https/);
   assert.doesNotThrow(() => crear('http://localhost:8080/aviso'));
   assert.doesNotThrow(() => crear('http://127.0.0.1:8080/aviso'));
+});
+
+test('no sigue redirecciones: la exigencia de https vale para cada envío, no solo al arrancar', async () => {
+  const fetch = fakeFetch();
+  const notify = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch, log: logger() });
+  await notify({ customer: CLIENTE, reason: 'boton', at: 0 });
+  assert.equal(fetch.calls[0].init.redirect, 'error');
+});
+
+test('un 307 del webhook no lleva el teléfono a otro destino', async t => {
+  const recibidos = [];
+  const destino = createServer((req, res) => { recibidos.push(req.url); res.end('ok'); });
+  destino.listen(0, '127.0.0.1');
+  await once(destino, 'listening');
+  const hook = createServer((req, res) => {
+    res.writeHead(307, { Location: `http://127.0.0.1:${destino.address().port}/robado` }).end();
+  });
+  hook.listen(0, '127.0.0.1');
+  await once(hook, 'listening');
+  t.after(() => { hook.close(); destino.close(); });
+
+  const log = logger();
+  const notify = createHandoffNotifier({ url: `http://127.0.0.1:${hook.address().port}/aviso`, restaurantName: 'X', log });
+  assert.equal(await notify({ customer: CLIENTE, reason: 'boton', at: 0 }), false);
+  assert.deepEqual(recibidos, [], 'el destino de la redirección no recibe nada');
+  assert.ok(!log.logs.join(' ').includes(CLIENTE), 'el log no lleva el teléfono completo');
 });
