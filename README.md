@@ -39,7 +39,7 @@ inicio ─► saludo ─► menú ─► cantidad ─► carrito ─┬─► zo
 
 - **Botones y listas** de WhatsApp en cada paso; también entiende texto simple: nombres o alias del menú, cantidades ("2", "dos"), "listo", "cancelar", "menú".
 - **Lectura del pedido antes de confirmar:** el resumen sale de `describeOrder` con el detalle, el domicilio, la forma de entrega y el pago.
-- **Derivación a una persona** con el botón "Hablar con persona" o frases explícitas como "quiero hablar con un asesor" (una frase que solo menciona "persona", como "una para cada persona", no deriva). Desde ahí el bot no responde hasta que alguien libera el chat o pasan 24 horas, el plazo de la ventana de atención de Meta. Tras dos mensajes que no entiende, ofrece la derivación.
+- **Derivación a una persona** con el botón "Hablar con persona" o frases explícitas como "quiero hablar con un asesor" (una frase que solo menciona "persona", como "una para cada persona", no deriva). Desde ahí el bot no responde hasta que alguien libera el chat o pasan 24 horas sin mensajes del cliente, igual que la ventana de atención de Meta. Si configuras `HANDOFF_WEBHOOK_URL`, el local recibe un aviso al instante (el JSON trae `text` para Slack y `content` para Discord). Tras dos mensajes que no entiende, ofrece la derivación.
 - **Sesiones en SQLite** (tabla `sessions`): el estado sobrevive a reinicios. Un carrito abandonado más de 3 horas se descarta y se le avisa al cliente.
 - **Pedido y sesión se guardan en una transacción**, y los mensajes de un mismo cliente se procesan en orden, uno a la vez.
 - **Envíos con reintento** ante errores transitorios de Meta (429, 5xx). Si la confirmación de un pedido no llega, el pedido queda como `sin_confirmar` y se le informa al cliente en su próximo mensaje.
@@ -67,6 +67,8 @@ src/
   conversation/
     flow.js              máquina de estados (función pura: sesión + mensaje → respuestas)
     bot.js               orquesta: sesión, transacción, envío, derivación
+  notify.js              aviso de derivación por URL (Slack, Discord, n8n)
+  privacy.js             enmascarado de teléfonos para los logs
   whatsapp/
     client.js            envío por la Cloud API (texto, botones, listas) y cliente de ensayo
     parse.js             parser del payload de Meta

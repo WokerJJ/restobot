@@ -13,11 +13,13 @@ Cada fase termina con pruebas en verde y algo que se puede demostrar.
 - Envío de mensajes por la Cloud API (texto, botones, listas) con validación de límites y modo ensayo.
 - Máquina de estados guardada en SQLite: saludo, menú paginado, carrito, zona o recoger, dirección, pago, confirmación.
 - Lectura del pedido antes de confirmar (`describeOrder`); pedido y sesión en una transacción.
-- Derivación a una persona (botón y frase); el bot calla hasta que se libera el chat (`npm run derivaciones`).
+- Derivación a una persona (botón y frase explícita): aviso al local por URL (Slack, Discord, n8n); el bot calla hasta que se libera el chat o pasan 24 h sin mensajes del cliente.
 - Simulador de chat en la terminal (`npm run simular`) y prueba de punta a punta webhook → Cloud API.
 
 ## Fase 3 — IA para texto libre
 - Interpretación de pedidos y modificaciones ("sin salsa de piña") con tool calling.
+- Extras del menú ("con queso extra") y notas por producto: líneas del carrito con extras y notas.
+- Separar la interpretación del texto de las transiciones de `flow.js`, para que la IA la reemplace sin tocar la persistencia.
 - Preguntas frecuentes desde la configuración del restaurante.
 - Conjunto de evaluación con chats anonimizados.
 
