@@ -87,7 +87,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = loadEnv();
   const restaurant = loadRestaurant(env.restaurantPath);
   const store = openStore(env.dbPath);
-  const notifyHandoff = createHandoffNotifier({ url: env.handoffWebhookUrl, restaurantName: restaurant.name });
+  const notifyHandoff = createHandoffNotifier({
+    url: env.handoffWebhookUrl, restaurantName: restaurant.name, timeZone: restaurant.timezone
+  });
   if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
   const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff });
   createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>

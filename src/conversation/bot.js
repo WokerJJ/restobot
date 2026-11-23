@@ -34,7 +34,8 @@ export function releaseHandoff(store, customer, now = Date.now()) {
 /**
  * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number,
  *          sessionTtlMs?:number, handoffTtlMs?:number, handoffMaxMs?:number,
- *          notifyHandoff?:(h:{customer:string, reason:string, cartItems:number, at:number}) => Promise<boolean>}} deps
+ *          notifyHandoff?:(h:{customer:string, reason:string, cartItems:number, at:number,
+ *                             ttlHours:number, expiresAt:number}) => Promise<boolean>}} deps
  *   notifyHandoff: aviso al local cuando un cliente pide una persona (ver src/notify.js).
  */
 export function createBot({
@@ -122,7 +123,11 @@ export function createBot({
       log.warn?.(`derivación a una persona: ${maskPhone(msg.from)} (${result.handoff.reason})`);
       const cartItems = (result.data.cart || []).reduce((n, l) => n + l.qty, 0);
       notified = Promise.resolve()
-        .then(() => notifyHandoff({ customer: msg.from, reason: result.handoff.reason, cartItems, at: t }))
+        // Los plazos salen de aquí, no fijos en el texto del aviso: pueden inyectarse distintos.
+        .then(() => notifyHandoff({
+          customer: msg.from, reason: result.handoff.reason, cartItems, at: t,
+          ttlHours: handoffTtlMs / (60 * 60 * 1000), expiresAt: t + handoffMaxMs
+        }))
         .catch(err => log.warn?.(`falló el aviso de derivación de ${maskPhone(msg.from)}: ${err.message}`));
     }
 

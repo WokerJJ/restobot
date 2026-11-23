@@ -26,7 +26,10 @@ function setup(opts = {}) {
   const logs = [];
   const log = { info: m => logs.push(m), warn: m => logs.push(m), error: m => logs.push(m) };
   let clock = opts.start ?? 1_000_000;
-  const bot = createBot({ restaurant, store, client, log, now: () => clock, notifyHandoff: opts.notifyHandoff });
+  const bot = createBot({
+    restaurant, store, client, log, now: () => clock, notifyHandoff: opts.notifyHandoff,
+    handoffTtlMs: opts.handoffTtlMs, handoffMaxMs: opts.handoffMaxMs
+  });
   let seq = 0;
   const msg = (extra) => ({ id: `wamid.in.${++seq}`, from: CLIENTE, name: 'Ana', ...extra });
   const say = text => bot.onMessage(msg({ type: 'text', text }));
@@ -181,7 +184,19 @@ test('al derivar avisa al local una sola vez, con el teléfono, el motivo y el c
   await tap('human');
   await say('¿hola?'); // ya derivado: ni respuesta ni aviso nuevo
   assert.equal(avisos.length, 1);
-  assert.deepEqual(avisos[0], { customer: CLIENTE, reason: 'boton', cartItems: 2, at: 1_000_000 });
+  assert.deepEqual(avisos[0], {
+    customer: CLIENTE, reason: 'boton', cartItems: 2, at: 1_000_000,
+    ttlHours: 24, expiresAt: 1_000_000 + HANDOFF_MAX_MS
+  });
+});
+
+test('el aviso lleva los plazos configurados de la derivación', async () => {
+  const avisos = [];
+  const H = 60 * 60 * 1000;
+  const { say } = setup({ handoffTtlMs: 6 * H, handoffMaxMs: 48 * H, notifyHandoff: async h => { avisos.push(h); return true; } });
+  await say('quiero hablar con un asesor');
+  assert.equal(avisos[0].ttlHours, 6);
+  assert.equal(avisos[0].expiresAt, 1_000_000 + 48 * H);
 });
 
 test('si el aviso al local falla, el cliente igual recibe su respuesta', async () => {

@@ -38,6 +38,35 @@ test('envía el aviso de derivación como JSON compatible con Slack y Discord', 
   assert.equal(c.body.content, c.body.text, 'Discord usa content; Slack usa text');
 });
 
+test('el texto refleja los plazos de la derivación y el JSON trae expiresAt en ISO', async () => {
+  const fetch = fakeFetch();
+  const notify = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch, log: logger() });
+  await notify({ customer: CLIENTE, reason: 'boton', at: 0, ttlHours: 24, expiresAt: Date.UTC(2026, 10, 26, 19, 0) });
+  const { body } = fetch.calls[0];
+  assert.match(body.text, /pasen 24 h sin mensajes \(como máximo hasta el 26\/11, 14:00\)/, 'hora de Bogotá por defecto');
+  assert.equal(body.expiresAt, '2026-11-26T19:00:00.000Z');
+  assert.equal(body.ttlHours, 24);
+
+  const otra = fakeFetch();
+  const notifyUtc = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch: otra, timeZone: 'UTC', log: logger() });
+  await notifyUtc({ customer: CLIENTE, reason: 'boton', at: 0, ttlHours: 6, expiresAt: Date.UTC(2026, 10, 26, 19, 0) });
+  assert.match(otra.calls[0].body.text, /pasen 6 h sin mensajes \(como máximo hasta el 26\/11, 19:00\)/, 'usa la zona del restaurante');
+});
+
+test('sin los plazos, el aviso usa un texto genérico sin cifras', async () => {
+  const fetch = fakeFetch();
+  const notify = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch, log: logger() });
+  await notify({ customer: CLIENTE, reason: 'boton', at: 0 });
+  const { body } = fetch.calls[0];
+  assert.match(body.text, /hasta que se libere el chat o venza la derivación\.$/);
+  assert.doesNotMatch(body.text, /\d+ h/);
+  assert.equal(body.expiresAt, null);
+});
+
+test('una zona horaria inválida falla al arrancar, no en cada aviso', () => {
+  assert.throws(() => createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', timeZone: 'Marte/Base' }), /timezone/);
+});
+
 test('sin URL configurada no hace nada', async () => {
   const fetch = fakeFetch();
   const notify = createHandoffNotifier({ url: '', restaurantName: 'X', fetch });

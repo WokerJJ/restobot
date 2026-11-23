@@ -24,23 +24,41 @@ function checkUrl(url) {
 }
 
 /**
- * @param {{url?:string, restaurantName:string, fetch?:typeof fetch, timeoutMs?:number, log?:object}} opts
- * @returns {(h:{customer:string, reason:string, cartItems?:number, at:number}) => Promise<boolean>}
+ * @param {{url?:string, restaurantName:string, timeZone?:string, fetch?:typeof fetch, timeoutMs?:number, log?:object}} opts
+ *   timeZone: zona del restaurante (restaurant.timezone) para mostrar la hora de vencimiento.
+ * @returns {(h:{customer:string, reason:string, cartItems?:number, at:number, ttlHours?:number, expiresAt?:number}) => Promise<boolean>}
+ *   ttlHours y expiresAt vienen del bot, que es quien conoce los plazos de la derivación.
  */
-export function createHandoffNotifier({ url, restaurantName, fetch: fetchImpl = globalThis.fetch, timeoutMs = 5000, log = console }) {
+export function createHandoffNotifier({
+  url, restaurantName, timeZone = 'America/Bogota', fetch: fetchImpl = globalThis.fetch, timeoutMs = 5000, log = console
+}) {
   if (!url) return async () => false;
   checkUrl(url);
+  // Se valida al arrancar: una zona inválida haría fallar cada aviso con RangeError.
+  let clock;
+  try {
+    clock = new Intl.DateTimeFormat('es-CO', { timeZone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  } catch {
+    throw new Error(`restaurant.timezone no es una zona horaria válida: ${timeZone}`);
+  }
 
-  return async function notifyHandoff({ customer, reason, cartItems = 0, at }) {
+  return async function notifyHandoff({ customer, reason, cartItems = 0, at, ttlHours, expiresAt }) {
     const cart = cartItems ? ` Tiene ${cartItems} producto(s) en el carrito.` : '';
-    const text = `🔔 ${restaurantName}: el cliente +${customer} quiere hablar con una persona (${REASONS[reason] || reason}).${cart} El bot no le responderá hasta que se libere el chat o pasen 24 h sin mensajes.`;
+    // Sin los plazos (p. ej. otro llamador) se usa un texto genérico: mejor sin cifras que con cifras falsas.
+    const hasTerms = Number.isFinite(ttlHours) && Number.isFinite(expiresAt);
+    const until = hasTerms
+      ? `pasen ${ttlHours} h sin mensajes (como máximo hasta el ${clock.format(expiresAt)})`
+      : 'venza la derivación';
+    const text = `🔔 ${restaurantName}: el cliente +${customer} quiere hablar con una persona (${REASONS[reason] || reason}).${cart} El bot no le responderá hasta que se libere el chat o ${until}.`;
     try {
       const res = await fetchImpl(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event: 'derivacion', restaurant: restaurantName, customer, reason, cartItems,
-          at: new Date(at).toISOString(), text, content: text
+          at: new Date(at).toISOString(),
+          ttlHours: hasTerms ? ttlHours : null, expiresAt: hasTerms ? new Date(expiresAt).toISOString() : null,
+          text, content: text
         }),
         signal: AbortSignal.timeout(timeoutMs),
         // checkUrl solo valida la URL configurada: si fetch siguiera un 30x, el teléfono podría
