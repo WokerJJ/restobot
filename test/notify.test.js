@@ -61,6 +61,12 @@ test('exige una URL https válida (http solo en localhost)', () => {
   assert.throws(() => crear('no es una url'), /HANDOFF_WEBHOOK_URL/);
   assert.throws(() => crear('http://hooks.example.com/x'), /https/);
   assert.throws(() => crear('ftp://hooks.example.com/x'), /https/);
+  // En Slack y Discord el secreto va en la ruta: el error de arranque no debe repetir la URL,
+  // ni siquiera el "protocolo" (en 'SECRETO123:x' el esquema sería el propio secreto).
+  const sinSecreto = re => err => re.test(err.message) && !/SECRETO/i.test(err.message);
+  assert.throws(() => crear('hooks.slack.com/services/T000/B000/SECRETO123'), sinSecreto(/HANDOFF_WEBHOOK_URL/));
+  assert.throws(() => crear('http://hooks.example.com/SECRETO'), sinSecreto(/https/));
+  assert.throws(() => crear('SECRETO123:x'), sinSecreto(/https/));
   assert.doesNotThrow(() => crear('http://localhost:8080/aviso'));
   assert.doesNotThrow(() => crear('http://127.0.0.1:8080/aviso'));
 });
@@ -89,4 +95,15 @@ test('un 307 del webhook no lleva el teléfono a otro destino', async t => {
   assert.equal(await notify({ customer: CLIENTE, reason: 'boton', at: 0 }), false);
   assert.deepEqual(recibidos, [], 'el destino de la redirección no recibe nada');
   assert.ok(!log.logs.join(' ').includes(CLIENTE), 'el log no lleva el teléfono completo');
+});
+
+test('el aviso se corta al vencer timeoutMs y no lanza', async () => {
+  // fetch que solo termina cuando se aborta su signal, como uno real contra un servidor colgado.
+  const fetch = (url, init) => new Promise((_, reject) => {
+    init.signal.addEventListener('abort', () => reject(init.signal.reason));
+  });
+  const log = logger();
+  const notify = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch, timeoutMs: 10, log });
+  assert.equal(await notify({ customer: CLIENTE, reason: 'boton', at: 0 }), false);
+  assert.equal(log.logs.length, 1);
 });

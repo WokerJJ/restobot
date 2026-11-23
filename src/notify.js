@@ -14,7 +14,9 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function checkUrl(url) {
   let u;
-  try { u = new URL(url); } catch { throw new Error(`HANDOFF_WEBHOOK_URL no es una URL válida: ${url}`); }
+  // El mensaje no repite el valor: en Slack y Discord el secreto va dentro de la ruta y el
+  // error de arranque termina en los logs de la plataforma.
+  try { u = new URL(url); } catch { throw new Error('HANDOFF_WEBHOOK_URL no es una URL válida (¿falta https://?)'); }
   const localHttp = u.protocol === 'http:' && LOCAL_HOSTS.has(u.hostname);
   if (u.protocol !== 'https:' && !localHttp) {
     throw new Error('HANDOFF_WEBHOOK_URL debe usar https (http solo se admite en localhost)');
