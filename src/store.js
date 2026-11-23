@@ -24,12 +24,26 @@ export function openStore(path = ':memory:') {
       total INTEGER NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    -- Estado de la conversación guiada: una fila por cliente.
+    CREATE TABLE IF NOT EXISTS sessions (
+      customer TEXT PRIMARY KEY,
+      state TEXT NOT NULL,
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
   `);
 
   const insertMsg = db.prepare(
     'INSERT OR IGNORE INTO messages (wa_id, customer, direction, type, body, media_id) VALUES (?,?,?,?,?,?)'
   );
   const insertOrder = db.prepare('INSERT INTO orders (customer, data, total) VALUES (?,?,?)');
+  const selectSession = db.prepare('SELECT state, data, updated_at FROM sessions WHERE customer = ?');
+  const upsertSession = db.prepare(`
+    INSERT INTO sessions (customer, state, data, updated_at) VALUES (?,?,?,?)
+    ON CONFLICT(customer) DO UPDATE SET state = excluded.state, data = excluded.data, updated_at = excluded.updated_at
+  `);
+  const selectByState = db.prepare('SELECT customer, data, updated_at FROM sessions WHERE state = ? ORDER BY updated_at');
 
   return {
     // Devuelve true si el mensaje es nuevo. Meta reintenta entregas: el id evita duplicados.
@@ -48,6 +62,28 @@ export function openStore(path = ':memory:') {
     getOrder(id) {
       const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
       return row && { ...row, data: JSON.parse(row.data) };
+    },
+    getSession(customer) {
+      const row = selectSession.get(customer);
+      return row ? { state: row.state, data: JSON.parse(row.data), updatedAt: row.updated_at } : null;
+    },
+    saveSession(customer, { state, data = {} }, now = Date.now()) {
+      upsertSession.run(customer, state, JSON.stringify(data), now);
+    },
+    sessionsInState(state) {
+      return selectByState.all(state).map(r => ({ customer: r.customer, data: JSON.parse(r.data), updatedAt: r.updated_at }));
+    },
+    // Ejecuta fn en una transacción: o se guarda todo (pedido + sesión) o nada.
+    transaction(fn) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const out = fn();
+        db.exec('COMMIT');
+        return out;
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
     },
     close: () => db.close()
   };
