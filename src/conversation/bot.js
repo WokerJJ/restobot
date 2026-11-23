@@ -27,9 +27,15 @@ export function releaseHandoff(store, customer, now = Date.now()) {
 }
 
 /**
- * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number, sessionTtlMs?:number, handoffTtlMs?:number}} deps
+ * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number,
+ *          sessionTtlMs?:number, handoffTtlMs?:number,
+ *          notifyHandoff?:(h:{customer:string, reason:string, cartItems:number, at:number}) => Promise<boolean>}} deps
+ *   notifyHandoff: aviso al local cuando un cliente pide una persona (ver src/notify.js).
  */
-export function createBot({ restaurant, store, client, log = console, now = Date.now, sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS }) {
+export function createBot({
+  restaurant, store, client, log = console, now = Date.now,
+  sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, notifyHandoff = async () => false
+}) {
   // Cola por cliente: los mensajes de una misma persona se procesan en orden, uno a la vez.
   // Hoy evita que las respuestas de dos toques seguidos se intercalen en el chat; cuando
   // step() sea asíncrono (IA, fase 3) evitará además que dos mensajes lean la misma sesión.
@@ -97,7 +103,15 @@ export function createBot({ restaurant, store, client, log = console, now = Date
       store.saveSession(msg.from, { state: result.state, data: result.data }, t);
     }
 
-    if (result.handoff) log.warn?.(`derivación a una persona: ${maskPhone(msg.from)} (${result.handoff.reason})`);
+    // El aviso al local sale en paralelo con la respuesta al cliente y nunca la bloquea.
+    let notified = null;
+    if (result.handoff) {
+      log.warn?.(`derivación a una persona: ${maskPhone(msg.from)} (${result.handoff.reason})`);
+      const cartItems = (result.data.cart || []).reduce((n, l) => n + l.qty, 0);
+      notified = Promise.resolve()
+        .then(() => notifyHandoff({ customer: msg.from, reason: result.handoff.reason, cartItems, at: t }))
+        .catch(err => log.warn?.(`falló el aviso de derivación de ${maskPhone(msg.from)}: ${err.message}`));
+    }
 
     for (const order of unconfirmed) {
       await deliver(msg.from, {
@@ -118,6 +132,8 @@ export function createBot({ restaurant, store, client, log = console, now = Date
         log.error?.(`no se pudo confirmar el pedido #${orderId} a ${maskPhone(msg.from)}: ${err.message}`);
       }
       throw err;
+    } finally {
+      await notified;
     }
     return result;
   }

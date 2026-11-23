@@ -6,6 +6,7 @@ import { verifySignature } from './whatsapp/signature.js';
 import { parseWebhook } from './whatsapp/parse.js';
 import { createWhatsAppClient, createDryRunClient } from './whatsapp/client.js';
 import { createBot } from './conversation/bot.js';
+import { createHandoffNotifier } from './notify.js';
 
 const MAX_BODY = 1_000_000;
 
@@ -86,7 +87,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = loadEnv();
   const restaurant = loadRestaurant(env.restaurantPath);
   const store = openStore(env.dbPath);
-  const bot = createBot({ restaurant, store, client: createClient(env) });
+  const notifyHandoff = createHandoffNotifier({ url: env.handoffWebhookUrl, restaurantName: restaurant.name });
+  if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
+  const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff });
   createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
 }

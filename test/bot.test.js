@@ -26,7 +26,7 @@ function setup(opts = {}) {
   const logs = [];
   const log = { info: m => logs.push(m), warn: m => logs.push(m), error: m => logs.push(m) };
   let clock = opts.start ?? 1_000_000;
-  const bot = createBot({ restaurant, store, client, log, now: () => clock });
+  const bot = createBot({ restaurant, store, client, log, now: () => clock, notifyHandoff: opts.notifyHandoff });
   let seq = 0;
   const msg = (extra) => ({ id: `wamid.in.${++seq}`, from: CLIENTE, name: 'Ana', ...extra });
   const say = text => bot.onMessage(msg({ type: 'text', text }));
@@ -169,6 +169,26 @@ test('una derivación que nadie liberó vence a las 24 horas y el bot retoma', a
   const aviso = logs.find(l => /derivación vencida/.test(l));
   assert.ok(aviso, 'se registra que la derivación venció');
   assert.ok(aviso.includes(maskPhone(CLIENTE)) && !aviso.includes(CLIENTE), 'el log no expone el teléfono');
+});
+
+test('al derivar avisa al local una sola vez, con el teléfono, el motivo y el carrito', async () => {
+  const avisos = [];
+  const { say, tap } = setup({ notifyHandoff: async h => { avisos.push(h); return true; } });
+  await say('hola');
+  await tap('menu');
+  await tap('item:perro');
+  await tap('qty:2');
+  await tap('human');
+  await say('¿hola?'); // ya derivado: ni respuesta ni aviso nuevo
+  assert.equal(avisos.length, 1);
+  assert.deepEqual(avisos[0], { customer: CLIENTE, reason: 'boton', cartItems: 2, at: 1_000_000 });
+});
+
+test('si el aviso al local falla, el cliente igual recibe su respuesta', async () => {
+  const { client, say } = setup({ notifyHandoff: async () => { throw new Error('hook caído'); } });
+  await say('hola');
+  await say('quiero hablar con un asesor');
+  assert.match(client.sent.at(-1).body, /te comunico con una persona/);
 });
 
 test('cada mensaje del cliente durante la derivación renueva el plazo de 24 horas', async () => {
