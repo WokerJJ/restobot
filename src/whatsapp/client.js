@@ -1,0 +1,151 @@
+// Envío de mensajes por la WhatsApp Cloud API (API oficial de Meta).
+// Sin dependencias: usa el fetch nativo, que se puede inyectar para las pruebas.
+
+// Límites documentados por Meta para mensajes interactivos.
+export const LIMITS = Object.freeze({
+  text: 4096,
+  interactiveBody: 1024,
+  buttons: 3,
+  buttonTitle: 20,
+  listButton: 20,
+  listRows: 10,
+  sectionTitle: 24,
+  rowTitle: 24,
+  rowDescription: 72,
+  rowId: 200
+});
+
+export class WhatsAppError extends Error {
+  constructor(message, { status, code, details } = {}) {
+    super(message);
+    this.name = 'WhatsAppError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function check(cond, message) {
+  if (!cond) throw new WhatsAppError(message);
+}
+
+const fits = (s, max) => typeof s === 'string' && s.length > 0 && s.length <= max;
+
+/** Construye el cuerpo JSON de un texto. */
+export function textPayload(to, body) {
+  check(fits(body, LIMITS.text), `El texto debe tener entre 1 y ${LIMITS.text} caracteres`);
+  return { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { body, preview_url: false } };
+}
+
+/** Botones de respuesta rápida: máximo 3, títulos de hasta 20 caracteres. */
+export function buttonsPayload(to, body, buttons) {
+  check(fits(body, LIMITS.interactiveBody), `El cuerpo debe tener entre 1 y ${LIMITS.interactiveBody} caracteres`);
+  check(Array.isArray(buttons) && buttons.length >= 1 && buttons.length <= LIMITS.buttons,
+    `Se permiten entre 1 y ${LIMITS.buttons} botones`);
+  const ids = new Set();
+  for (const b of buttons) {
+    check(fits(b.id, 256) && !ids.has(b.id), `id de botón vacío o repetido: ${b.id}`);
+    check(fits(b.title, LIMITS.buttonTitle), `Título de botón inválido (máx. ${LIMITS.buttonTitle}): ${b.title}`);
+    ids.add(b.id);
+  }
+  return {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: body },
+      action: { buttons: buttons.map(b => ({ type: 'reply', reply: { id: b.id, title: b.title } })) }
+    }
+  };
+}
+
+/** Lista desplegable: máximo 10 filas en total entre todas las secciones. */
+export function listPayload(to, body, button, sections) {
+  check(fits(body, LIMITS.interactiveBody), `El cuerpo debe tener entre 1 y ${LIMITS.interactiveBody} caracteres`);
+  check(fits(button, LIMITS.listButton), `Texto del botón de la lista inválido (máx. ${LIMITS.listButton})`);
+  check(Array.isArray(sections) && sections.length >= 1, 'La lista necesita al menos una sección');
+  const rows = sections.flatMap(s => s.rows || []);
+  check(rows.length >= 1 && rows.length <= LIMITS.listRows, `La lista admite entre 1 y ${LIMITS.listRows} filas`);
+  check(sections.length === 1 || sections.every(s => fits(s.title, LIMITS.sectionTitle)),
+    `Con varias secciones, cada una necesita título (máx. ${LIMITS.sectionTitle})`);
+  const ids = new Set();
+  for (const r of rows) {
+    check(fits(r.id, LIMITS.rowId) && !ids.has(r.id), `id de fila vacío o repetido: ${r.id}`);
+    check(fits(r.title, LIMITS.rowTitle), `Título de fila inválido (máx. ${LIMITS.rowTitle}): ${r.title}`);
+    check(r.description === undefined || fits(r.description, LIMITS.rowDescription),
+      `Descripción de fila inválida (máx. ${LIMITS.rowDescription}): ${r.id}`);
+    ids.add(r.id);
+  }
+  return {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: body },
+      action: {
+        button,
+        sections: sections.map(s => ({
+          ...(s.title ? { title: s.title } : {}),
+          rows: s.rows.map(r => ({ id: r.id, title: r.title, ...(r.description ? { description: r.description } : {}) }))
+        }))
+      }
+    }
+  };
+}
+
+/**
+ * @param {{accessToken:string, phoneNumberId:string, apiVersion?:string, baseUrl?:string,
+ *          fetch?:typeof fetch, timeoutMs?:number}} opts
+ */
+export function createWhatsAppClient({
+  accessToken, phoneNumberId, apiVersion = 'v23.0', baseUrl = 'https://graph.facebook.com',
+  fetch: fetchImpl = globalThis.fetch, timeoutMs = 10_000
+}) {
+  if (!accessToken || !phoneNumberId) {
+    throw new WhatsAppError('Faltan WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID');
+  }
+  const url = `${baseUrl}/${apiVersion}/${encodeURIComponent(phoneNumberId)}/messages`;
+
+  async function post(payload) {
+    let res;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (err) {
+      throw new WhatsAppError(`No se pudo contactar la Cloud API: ${err.message}`, { details: err });
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // Nunca incluir el token en el error: solo el código y el mensaje de Meta.
+      throw new WhatsAppError(`Cloud API respondió ${res.status}: ${data?.error?.message || 'error desconocido'}`,
+        { status: res.status, code: data?.error?.code, details: data?.error });
+    }
+    return { id: data?.messages?.[0]?.id ?? null };
+  }
+
+  return {
+    // async: un error de validación llega como promesa rechazada, igual que un error de red.
+    sendText: async (to, body) => post(textPayload(to, body)),
+    sendButtons: async (to, body, buttons) => post(buttonsPayload(to, body, buttons)),
+    sendList: async (to, body, button, sections) => post(listPayload(to, body, button, sections))
+  };
+}
+
+/**
+ * Cliente de "ensayo": no llama a Meta, solo registra lo que enviaría.
+ * Sirve para correr el bot en local sin credenciales.
+ */
+export function createDryRunClient(log = console) {
+  let n = 0;
+  const fake = (to, kind, payload) => {
+    log.info?.(`[ensayo] → ${to} (${kind})`, JSON.stringify(payload.interactive ?? payload.text));
+    return { id: `dryrun.${++n}` };
+  };
+  return {
+    sendText: async (to, body) => fake(to, 'texto', textPayload(to, body)),
+    sendButtons: async (to, body, buttons) => fake(to, 'botones', buttonsPayload(to, body, buttons)),
+    sendList: async (to, body, button, sections) => fake(to, 'lista', listPayload(to, body, button, sections))
+  };
+}

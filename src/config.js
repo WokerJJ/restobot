@@ -7,6 +7,7 @@ export function loadEnv(env = process.env) {
     appSecret: env.WHATSAPP_APP_SECRET || '',
     accessToken: env.WHATSAPP_ACCESS_TOKEN || '',
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || '',
+    apiVersion: env.WHATSAPP_API_VERSION || 'v23.0',
     dbPath: env.DB_PATH || 'data/restobot.db',
     restaurantPath: env.RESTAURANT_CONFIG || 'config/restaurant.json'
   };
