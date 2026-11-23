@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
 import { openStore } from '../src/store.js';
-import { createBot, releaseHandoff, maskPhone, SESSION_TTL_MS, HANDOFF_TTL_MS } from '../src/conversation/bot.js';
+import { createBot, releaseHandoff, maskPhone, SESSION_TTL_MS, HANDOFF_TTL_MS, HANDOFF_MAX_MS } from '../src/conversation/bot.js';
 
 const restaurant = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
 const CLIENTE = '573001112233';
@@ -208,6 +208,58 @@ test('cada mensaje del cliente durante la derivación renueva el plazo de 24 hor
 
   tick(HANDOFF_TTL_MS + 1);
   await say('hola');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
+});
+
+test('la derivación vence al tope de 72 h aunque el cliente siga escribiendo', async () => {
+  // Si el aviso al local falló y nadie libera el chat, el tope evita que el bot calle para siempre.
+  const { store, client, say, tick, logs } = setup();
+  await say('hola');
+  await say('quiero hablar con un asesor');
+  const enviados = client.sent.length;
+  const H = 60 * 60 * 1000;
+
+  for (let i = 0; i < 3; i++) {
+    tick(23 * H);
+    await say('¿alguien me atiende?');
+  }
+  tick(HANDOFF_MAX_MS - 69 * H); // justo en el tope: todavía en silencio
+  await say('¿hola?');
+  assert.equal(client.sent.length, enviados, 'antes del tope el bot sigue en silencio');
+  assert.equal(store.getSession(CLIENTE).state, 'humano');
+
+  tick(1); // el último mensaje fue hace 1 ms, pero la derivación ya pasó el tope
+  await say('¿hola?');
+  assert.ok(client.sent.length > enviados, 'después del tope el bot responde');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
+  assert.ok(logs.some(l => /derivación vencida/.test(l)));
+});
+
+test('renovar no cambia handoffAt', async () => {
+  const { store, say, tick } = setup();
+  await say('hola');
+  await say('quiero hablar con un asesor');
+  assert.equal(store.getSession(CLIENTE).data.handoffAt, 1_000_000);
+
+  tick(5 * 60 * 60 * 1000);
+  await say('¿siguen ahí?');
+  const s = store.getSession(CLIENTE);
+  assert.equal(s.data.handoffAt, 1_000_000, 'handoffAt marca cuándo empezó la derivación');
+  assert.equal(s.updatedAt, 1_000_000 + 5 * 60 * 60 * 1000, 'updatedAt marca el último mensaje');
+});
+
+test('una derivación antigua sin handoffAt toma updatedAt como inicio y también vence al tope', async () => {
+  const { store, client, say, tick } = setup();
+  store.saveSession(CLIENTE, { state: 'humano', data: { handoffReason: 'frase' } }, 1_000_000);
+  const H = 60 * 60 * 1000;
+  for (let i = 0; i < 3; i++) {
+    tick(23 * H);
+    await say('¿hola?');
+  }
+  assert.equal(client.sent.length, 0);
+  assert.equal(store.getSession(CLIENTE).data.handoffAt, 1_000_000);
+  tick(4 * H);
+  await say('¿hola?');
   assert.equal(store.getSession(CLIENTE).state, 'saludo');
 });
 

@@ -119,7 +119,13 @@ export function openStore(path = ':memory:') {
     INSERT INTO sessions (customer, state, data, updated_at) VALUES (?,?,?,?)
     ON CONFLICT(customer) DO UPDATE SET state = excluded.state, data = excluded.data, updated_at = excluded.updated_at
   `);
-  const selectByState = db.prepare('SELECT customer, data, updated_at FROM sessions WHERE state = ? ORDER BY updated_at');
+  // Las derivaciones se ordenan por su inicio (data.handoffAt), no por el último mensaje:
+  // quien más lleva esperando va primero aunque haya escrito hace poco. json_valid evita que
+  // una fila con data corrupta haga fallar toda la consulta; sin handoffAt se usa updated_at.
+  const selectByState = db.prepare(`
+    SELECT customer, data, updated_at FROM sessions WHERE state = ?
+    ORDER BY COALESCE(CASE WHEN json_valid(data) THEN json_extract(data, '$.handoffAt') END, updated_at)
+  `);
 
   return {
     // Devuelve true si el mensaje es nuevo. Meta reintenta entregas: el id evita duplicados.

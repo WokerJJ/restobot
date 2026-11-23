@@ -14,10 +14,10 @@ try {
   if (cmd === 'listar') {
     const rows = store.sessionsInState('humano');
     if (!rows.length) console.log('No hay conversaciones esperando a una persona.');
+    const fecha = ms => new Date(ms).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
     for (const s of rows) {
-      const since = new Date(s.updatedAt).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
       const items = (s.data.cart || []).reduce((n, l) => n + l.qty, 0);
-      console.log(`${s.customer}  desde ${since}  motivo: ${s.data.handoffReason || '-'}  carrito: ${items} producto(s)`);
+      console.log(`${s.customer}  derivado desde ${fecha(s.data.handoffAt ?? s.updatedAt)} · último mensaje ${fecha(s.updatedAt)}  motivo: ${s.data.handoffReason || '-'}  carrito: ${items} producto(s)`);
     }
     // Pedidos guardados cuya confirmación no llegó al cliente: el local debe confirmarlos a mano.
     for (const o of store.ordersInStatus('sin_confirmar')) {

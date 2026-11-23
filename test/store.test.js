@@ -26,6 +26,16 @@ test('guarda y actualiza la sesión de cada cliente', () => {
   store.close();
 });
 
+test('las derivaciones se listan por handoffAt, aunque el cliente haya renovado el plazo', () => {
+  // El que más lleva esperando va primero, aunque haya escrito hace poco (updated_at reciente).
+  const store = openStore(':memory:');
+  store.saveSession('57', { state: 'humano', data: { handoffAt: 1 } }, 10);
+  store.saveSession('58', { state: 'humano', data: { handoffAt: 5 } }, 5);
+  store.saveSession('59', { state: 'humano', data: {} }, 3); // sesión antigua: usa updated_at
+  assert.deepEqual(store.sessionsInState('humano').map(s => s.customer), ['57', '59', '58']);
+  store.close();
+});
+
 test('lista las sesiones en un estado (p. ej. derivadas a una persona)', () => {
   const store = openStore(':memory:');
   store.saveSession('57', { state: 'humano', data: { reason: 'frase' } }, 2);

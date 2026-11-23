@@ -13,6 +13,11 @@ export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
 // del cliente: pasado ese plazo la persona ya no puede responder con texto libre.
 export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
 
+// Tope absoluto de una derivación, contado desde que empezó (data.handoffAt), aunque el
+// cliente siga escribiendo. El aviso al local puede fallar y nadie liberar el chat: sin
+// este tope, un cliente que escribe una vez al día dejaría al bot callado para siempre.
+export const HANDOFF_MAX_MS = 72 * 60 * 60 * 1000;
+
 // Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
 const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -28,13 +33,14 @@ export function releaseHandoff(store, customer, now = Date.now()) {
 
 /**
  * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number,
- *          sessionTtlMs?:number, handoffTtlMs?:number,
+ *          sessionTtlMs?:number, handoffTtlMs?:number, handoffMaxMs?:number,
  *          notifyHandoff?:(h:{customer:string, reason:string, cartItems:number, at:number}) => Promise<boolean>}} deps
  *   notifyHandoff: aviso al local cuando un cliente pide una persona (ver src/notify.js).
  */
 export function createBot({
   restaurant, store, client, log = console, now = Date.now,
-  sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, notifyHandoff = async () => false
+  sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, handoffMaxMs = HANDOFF_MAX_MS,
+  notifyHandoff = async () => false
 }) {
   // Cola por cliente: los mensajes de una misma persona se procesan en orden, uno a la vez.
   // Hoy evita que las respuestas de dos toques seguidos se intercalen en el chat; cuando
@@ -65,9 +71,12 @@ export function createBot({
     let session = store.getSession(msg.from);
     let abandoned = false;
     if (session?.state === STATES.HUMANO) {
-      if (t - session.updatedAt <= handoffTtlMs) {
+      // Las derivaciones guardadas antes de existir handoffAt toman updatedAt como inicio,
+      // y se fija al renovar para que también ellas lleguen al tope.
+      const handoffAt = session.data?.handoffAt ?? session.updatedAt;
+      if (t - session.updatedAt <= handoffTtlMs && t - handoffAt <= handoffMaxMs) {
         // El bot calla, pero el mensaje renueva el plazo: la persona puede seguir atendiendo.
-        store.saveSession(msg.from, { state: STATES.HUMANO, data: session.data }, t);
+        store.saveSession(msg.from, { state: STATES.HUMANO, data: { ...session.data, handoffAt } }, t);
         return { state: STATES.HUMANO, silenced: true };
       }
       log.info?.(`derivación vencida, el bot retoma la conversación: ${maskPhone(msg.from)}`);
@@ -85,6 +94,8 @@ export function createBot({
       : [];
 
     const result = step(restaurant, session, msg);
+    // flow.js no conoce el reloj: el inicio de la derivación se anota aquí.
+    const data = result.handoff ? { ...result.data, handoffAt: t } : result.data;
     let replies = abandoned
       ? [{ kind: 'text', body: 'Tu pedido anterior quedó sin terminar por inactividad, así que empezamos de nuevo.' }, ...result.replies]
       : result.replies;
@@ -94,13 +105,13 @@ export function createBot({
       // Pedido y sesión se guardan juntos: nunca queda un pedido sin cerrar la sesión ni al revés.
       orderId = store.transaction(() => {
         const id = store.createOrder(msg.from, result.order);
-        store.saveSession(msg.from, { state: result.state, data: result.data }, t);
+        store.saveSession(msg.from, { state: result.state, data }, t);
         return id;
       });
       replies = confirmedReplies(restaurant, orderId, result.order);
       log.info?.(`pedido #${orderId} confirmado (${maskPhone(msg.from)}, total ${result.order.total})`);
     } else {
-      store.saveSession(msg.from, { state: result.state, data: result.data }, t);
+      store.saveSession(msg.from, { state: result.state, data }, t);
     }
 
     // El aviso al local sale en paralelo con la respuesta al cliente y nunca la bloquea.
