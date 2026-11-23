@@ -5,6 +5,12 @@ import { dirname } from 'node:path';
 export function openStore(path = ':memory:') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  // Otro proceso (p. ej. `npm run derivaciones`) puede usar la base mientras corre el servidor.
+  // WAL deja leer mientras alguien escribe, y busy_timeout espera hasta 2 s un bloqueo en vez
+  // de fallar con "database is locked" y perder el mensaje. Se usa PRAGMA porque la opción
+  // `timeout` de DatabaseSync no existe en Node 22.13.
+  if (path !== ':memory:') db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA busy_timeout = 2000;');
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       wa_id TEXT PRIMARY KEY,
