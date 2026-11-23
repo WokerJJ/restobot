@@ -39,20 +39,22 @@ inicio ─► saludo ─► menú ─► cantidad ─► carrito ─┬─► zo
 
 - **Botones y listas** de WhatsApp en cada paso; también entiende texto simple: nombres o alias del menú, cantidades ("2", "dos"), "listo", "cancelar", "menú".
 - **Lectura del pedido antes de confirmar:** el resumen sale de `describeOrder` con el detalle, el domicilio, la forma de entrega y el pago.
-- **Derivación a una persona** con el botón "Hablar con persona" o frases como "quiero hablar con un asesor". Desde ahí el bot no responde hasta que alguien libera el chat. Tras dos mensajes que no entiende, ofrece la derivación.
-- **Sesiones en SQLite** (tabla `sessions`): el estado sobrevive a reinicios. Un carrito abandonado más de 3 horas se descarta.
+- **Derivación a una persona** con el botón "Hablar con persona" o frases explícitas como "quiero hablar con un asesor" (una frase que solo menciona "persona", como "una para cada persona", no deriva). Desde ahí el bot no responde hasta que alguien libera el chat o pasan 24 horas, el plazo de la ventana de atención de Meta. Tras dos mensajes que no entiende, ofrece la derivación.
+- **Sesiones en SQLite** (tabla `sessions`): el estado sobrevive a reinicios. Un carrito abandonado más de 3 horas se descarta y se le avisa al cliente.
 - **Pedido y sesión se guardan en una transacción**, y los mensajes de un mismo cliente se procesan en orden, uno a la vez.
+- **Envíos con reintento** ante errores transitorios de Meta (429, 5xx). Si la confirmación de un pedido no llega, el pedido queda como `sin_confirmar` y se le informa al cliente en su próximo mensaje.
+- **Esquema versionado:** `src/store.js` aplica las migraciones pendientes al abrir la base (`PRAGMA user_version`) y usa WAL para que los scripts puedan leerla mientras corre el servidor.
 
 ### Derivaciones
 
 Mientras llega el panel del local (fase 5), las conversaciones derivadas se gestionan desde la terminal:
 
 ```bash
-npm run derivaciones                          # lista los chats que esperan a una persona
+npm run derivaciones                          # chats que esperan a una persona y pedidos sin confirmar
 npm run derivaciones -- liberar 573001112233  # el bot vuelve a atender ese chat
 ```
 
-La persona del local responde desde la app de WhatsApp Business o el administrador de Meta. Todo lo recibido y enviado queda en la tabla `messages`.
+La tabla `messages` guarda lo que escribe el cliente y lo que envía el bot. **Lo que responda la persona del local todavía no se guarda ni tiene un canal definido:** un número conectado a la Cloud API no se usa tal cual desde la app de WhatsApp Business (requiere el modo coexistencia de Meta, cuyos mensajes llegan como eventos que el parser aún no procesa). Responder desde el panel es parte de la fase 5.
 
 ## Estructura
 

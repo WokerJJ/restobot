@@ -27,6 +27,7 @@ Cada fase termina con pruebas en verde y algo que se puede demostrar.
 
 ## Fase 5 — Panel del local
 - Pedidos en tiempo real, cambio de estado con aviso al cliente, alertas de derivación.
+- Responder a las derivaciones desde el panel y guardar esas respuestas en el historial.
 - Modo sombra: el local aprueba cada respuesta.
 
 ## Fase 6 — Producción
