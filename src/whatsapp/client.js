@@ -101,7 +101,7 @@ export function listPayload(to, body, button, sections) {
  *   retryDelaysMs: espera antes de cada reintento; su longitud es el número de reintentos.
  */
 export function createWhatsAppClient({
-  accessToken, phoneNumberId, apiVersion = 'v23.0', baseUrl = 'https://graph.facebook.com',
+  accessToken, phoneNumberId, apiVersion = 'v27.0', baseUrl = 'https://graph.facebook.com',
   fetch: fetchImpl = globalThis.fetch, timeoutMs = 10_000, retryDelaysMs = [500, 1500]
 }) {
   if (!accessToken || !phoneNumberId) {

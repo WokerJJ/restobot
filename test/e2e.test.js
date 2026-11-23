@@ -55,7 +55,7 @@ test('un pedido completo por el webhook llega a la Cloud API y queda guardado', 
 
   try {
     await text('hola');
-    assert.equal(graph[0].url, 'https://graph.facebook.com/v23.0/999/messages');
+    assert.equal(graph[0].url, 'https://graph.facebook.com/v27.0/999/messages');
     assert.equal(graph[0].body.to, CLIENTE);
     assert.equal(graph[0].body.interactive.type, 'button');
 

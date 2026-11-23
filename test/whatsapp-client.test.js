@@ -15,7 +15,7 @@ function fakeFetch(response = { status: 200, body: { messages: [{ id: 'wamid.OUT
 }
 
 // Sin esperas entre reintentos para que las pruebas sean rápidas.
-const client = fetch => createWhatsAppClient({ accessToken: 'TOKEN', phoneNumberId: '123', apiVersion: 'v23.0', fetch, retryDelaysMs: [0, 0] });
+const client = fetch => createWhatsAppClient({ accessToken: 'TOKEN', phoneNumberId: '123', apiVersion: 'v27.0', fetch, retryDelaysMs: [0, 0] });
 
 // fetch simulado que responde en orden: cada elemento es un { status, body } o un Error.
 function seqFetch(...responses) {
@@ -34,7 +34,7 @@ test('envía texto al endpoint correcto con el token y devuelve el id', async ()
   const r = await client(fetch).sendText('573001112233', 'Hola');
   assert.equal(r.id, 'wamid.OUT1');
   const [c] = fetch.calls;
-  assert.equal(c.url, 'https://graph.facebook.com/v23.0/123/messages');
+  assert.equal(c.url, 'https://graph.facebook.com/v27.0/123/messages');
   assert.equal(c.init.method, 'POST');
   assert.equal(c.init.headers.Authorization, 'Bearer TOKEN');
   assert.deepEqual(c.body, {
