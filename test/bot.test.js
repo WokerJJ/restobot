@@ -282,6 +282,42 @@ test('si liberan el chat entre la lectura y la renovación, el bot responde y no
   real.close();
 });
 
+// Aviso al local que no termina hasta que la prueba lo libera.
+function avisoPendiente() {
+  let liberar;
+  const hecho = new Promise(r => { liberar = r; });
+  return { notifyHandoff: () => hecho.then(() => true), liberar: () => liberar() };
+}
+const vaciarCola = async () => { for (let i = 0; i < 10; i++) await new Promise(r => setImmediate(r)); };
+const estado = p => { const s = { listo: false }; p.then(() => { s.listo = true; }, () => { s.listo = true; }); return s; };
+
+test('la respuesta al cliente sale antes de que termine el aviso', async () => {
+  const aviso = avisoPendiente();
+  const { client, say } = setup({ notifyHandoff: aviso.notifyHandoff });
+  const p = estado(say('quiero hablar con un asesor'));
+  await vaciarCola();
+  assert.match(client.sent.at(-1).body, /te comunico con una persona/, 'el aviso no retrasa la respuesta');
+  assert.equal(p.listo, false, 'el mensaje termina solo cuando termina el aviso');
+  aviso.liberar();
+  await vaciarCola();
+  assert.equal(p.listo, true);
+});
+
+test('el aviso se espera aunque falle el envío del aviso de pedido sin confirmar', async () => {
+  const client = fakeClient();
+  client.sendText = async () => { throw new Error('Cloud API caída'); };
+  const aviso = avisoPendiente();
+  const { store, bot, msg } = setup({ client, notifyHandoff: aviso.notifyHandoff });
+  store.setOrderStatus(store.createOrder(CLIENTE, { total: 1000, lines: [] }), 'sin_confirmar');
+
+  const run = bot.onMessage(msg({ type: 'text', text: 'quiero hablar con un asesor' }));
+  const p = estado(run);
+  await vaciarCola();
+  assert.equal(p.listo, false, 'no termina (ni libera la cola) con el aviso al local en vuelo');
+  aviso.liberar();
+  await assert.rejects(run, /Cloud API caída/);
+});
+
 test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente mensaje informa el pedido #1', async () => {
   const client = fakeClient();
   const sendText = client.sendText;

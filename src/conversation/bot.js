@@ -126,16 +126,15 @@ export function createBot({
         .catch(err => log.warn?.(`falló el aviso de derivación de ${maskPhone(msg.from)}: ${err.message}`));
     }
 
-    for (const order of unconfirmed) {
-      await deliver(msg.from, {
-        kind: 'text',
-        body: `Tu pedido #${order.id} ya quedó registrado (total ${formatCOP(order.total)}). No pudimos confirmártelo antes por un problema de conexión; no hace falta que lo vuelvas a pedir.`
-      });
-      store.setOrderStatus(order.id, 'recibido');
-    }
-
     // Se envían en orden: WhatsApp no garantiza el orden si salen en paralelo.
     try {
+      for (const order of unconfirmed) {
+        await deliver(msg.from, {
+          kind: 'text',
+          body: `Tu pedido #${order.id} ya quedó registrado (total ${formatCOP(order.total)}). No pudimos confirmártelo antes por un problema de conexión; no hace falta que lo vuelvas a pedir.`
+        });
+        store.setOrderStatus(order.id, 'recibido');
+      }
       for (const reply of replies) await deliver(msg.from, reply);
     } catch (err) {
       // El pedido ya está guardado pero el cliente no lo sabe: se marca para avisarle en su
@@ -146,6 +145,8 @@ export function createBot({
       }
       throw err;
     } finally {
+      // Esperar el aviso puede retener la cola de este cliente hasta su timeout (5 s): es
+      // aceptable, porque tras derivar el bot ya está en silencio con este cliente.
       await notified;
     }
     return result;
