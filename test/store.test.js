@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { rmSync, mkdirSync } from 'node:fs';
 import { once } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore } from '../src/store.js';
+import { openStore, MIGRATIONS } from '../src/store.js';
 
 // Base en un archivo temporal propio (con sus -wal y -shm); se borra al terminar la prueba.
 function tempDb(t) {
@@ -120,5 +120,103 @@ test('si SQLite ya revirtió la transacción, se conserva el error original', t 
     assert.equal(store.getOrder(1), undefined);
   } finally {
     store.close();
+  }
+});
+
+// Esquema exacto de la fase 1 (commit 6036ae5), sin user_version.
+const ESQUEMA_FASE_1 = `
+  CREATE TABLE IF NOT EXISTS messages (
+    wa_id TEXT PRIMARY KEY,
+    customer TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    type TEXT NOT NULL,
+    body TEXT,
+    media_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_messages_customer ON messages(customer, created_at);
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'recibido',
+    data TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`;
+
+function baseFase1(t) {
+  const path = tempDb(t);
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new DatabaseSync(path);
+  db.exec(ESQUEMA_FASE_1);
+  db.exec(`INSERT INTO orders (customer, data, total) VALUES ('57', '{"total":9000}', 9000), ('58', '{"total":4000}', 4000)`);
+  db.exec(`DELETE FROM orders WHERE id = 2`);
+  db.exec(`INSERT INTO messages (wa_id, customer, direction, type, body) VALUES ('wamid.f1', '57', 'in', 'text', 'hola')`);
+  db.close();
+  return path;
+}
+
+function inspeccionar(path) {
+  const db = new DatabaseSync(path);
+  try {
+    return {
+      version: db.prepare('PRAGMA user_version').get().user_version,
+      esquema: db.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all()
+    };
+  } finally {
+    db.close();
+  }
+}
+
+test('migra una base de la fase 1 conservando pedidos, mensajes e ids', t => {
+  const path = baseFase1(t);
+  const store = openStore(path);
+  try {
+    const { version, esquema } = inspeccionar(path);
+    assert.equal(version, MIGRATIONS.length);
+    assert.ok(esquema.some(o => o.name === 'sessions'), 'crea sessions');
+    assert.ok(esquema.some(o => o.name === 'idx_sessions_state'));
+    assert.match(esquema.find(o => o.name === 'orders').sql, /json_valid\(data\)/);
+    assert.deepEqual(store.getOrder(1).data, { total: 9000 });
+    assert.equal(store.history('57').at(-1).body, 'hola');
+    assert.equal(store.createOrder('59', { total: 1000 }), 3, 'AUTOINCREMENT no reutiliza el id 2 borrado');
+    store.saveSession('57', { state: 'menu', data: { cart: [] } }, 1);
+    assert.equal(store.getSession('57').state, 'menu');
+  } finally {
+    store.close();
+  }
+});
+
+test('reabrir una base ya migrada no cambia nada ni falla', t => {
+  const path = baseFase1(t);
+  openStore(path).close();
+  const antes = inspeccionar(path);
+  const store = openStore(path);
+  try {
+    assert.deepEqual(inspeccionar(path), antes);
+    assert.equal(store.getOrder(1).total, 9000);
+  } finally {
+    store.close();
+  }
+});
+
+test('las restricciones CHECK rechazan sesiones y pedidos inválidos', t => {
+  const path = tempDb(t);
+  openStore(path).close();
+  const db = new DatabaseSync(path);
+  try {
+    const invalidos = [
+      "INSERT INTO sessions (customer, state, data, updated_at) VALUES ('57', 'menu', '{', 1)",
+      "INSERT INTO sessions (customer, state, data, updated_at) VALUES ('57', '', '{}', 1)",
+      "INSERT INTO sessions (customer, state, data, updated_at) VALUES ('57', 'menu', '{}', 0)",
+      "INSERT INTO orders (customer, data, total) VALUES ('57', '{}', -1)",
+      "INSERT INTO orders (customer, data, total) VALUES ('57', '{}', 9000.5)",
+      "INSERT INTO orders (customer, data, total) VALUES ('57', 'no es json', 9000)"
+    ];
+    for (const sql of invalidos) assert.throws(() => db.exec(sql), /CHECK constraint failed/, sql);
+    db.exec("INSERT INTO orders (customer, data, total) VALUES ('57', '{}', 9000)");
+  } finally {
+    db.close();
   }
 });
