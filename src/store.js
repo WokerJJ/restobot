@@ -119,6 +119,14 @@ export function openStore(path = ':memory:') {
     INSERT INTO sessions (customer, state, data, updated_at) VALUES (?,?,?,?)
     ON CONFLICT(customer) DO UPDATE SET state = excluded.state, data = excluded.data, updated_at = excluded.updated_at
   `);
+  // Renovar una derivación es un UPDATE condicionado al estado, no un UPSERT: si otro proceso
+  // (`npm run derivaciones -- liberar`) liberó el chat después de leerlo, no se reactiva.
+  // Con data inválida o NULL se parte de '{}' para que json_set no falle.
+  const touchHandoffStmt = db.prepare(`
+    UPDATE sessions SET updated_at = ?,
+      data = json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.handoffAt', ?)
+    WHERE customer = ? AND state = 'humano'
+  `);
   // Las derivaciones se ordenan por su inicio (data.handoffAt), no por el último mensaje:
   // quien más lleva esperando va primero aunque haya escrito hace poco. json_valid evita que
   // una fila con data corrupta haga fallar toda la consulta; sin handoffAt se usa updated_at.
@@ -169,6 +177,10 @@ export function openStore(path = ':memory:') {
     },
     saveSession(customer, { state, data = {} }, now = Date.now()) {
       upsertSession.run(customer, state, JSON.stringify(data), now);
+    },
+    // Devuelve true si la sesión seguía derivada y se renovó; false si ya la habían liberado.
+    touchHandoff(customer, now, handoffAt) {
+      return touchHandoffStmt.run(now, handoffAt, customer).changes === 1;
     },
     sessionsInState(state) {
       return selectByState.all(state).map(r => ({ customer: r.customer, data: parseSessionData(r.data) ?? {}, updatedAt: r.updated_at }));

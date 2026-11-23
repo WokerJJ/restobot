@@ -263,6 +263,25 @@ test('una derivación antigua sin handoffAt toma updatedAt como inicio y tambié
   assert.equal(store.getSession(CLIENTE).state, 'saludo');
 });
 
+test('si liberan el chat entre la lectura y la renovación, el bot responde y no lo vuelve a derivar', async () => {
+  // Carrera con `npm run derivaciones -- liberar` (otro proceso): el bot leyó 'humano', pero
+  // cuando va a renovar el plazo la fila ya está liberada.
+  const real = openStore(':memory:');
+  real.saveSession(CLIENTE, { state: 'humano', data: { handoffReason: 'frase', handoffAt: 1_000_000 } }, 1_000_000);
+  const vieja = real.getSession(CLIENTE);
+  releaseHandoff(real, CLIENTE, 1_000_500);
+  let lecturas = 0;
+  const store = { ...real, getSession: c => (lecturas++ === 0 ? vieja : real.getSession(c)) };
+  const client = fakeClient();
+  const log = { info() {}, warn() {}, error() {} };
+  const bot = createBot({ restaurant, store, client, log, now: () => 1_001_000 });
+
+  await bot.onMessage({ id: 'wamid.in.carrera', from: CLIENTE, name: 'Ana', type: 'text', text: 'hola' });
+  assert.ok(client.sent.length > 0, 'el bot responde: la sesión ya no estaba derivada');
+  assert.notEqual(real.getSession(CLIENTE).state, 'humano', 'la liberación no se pierde');
+  real.close();
+});
+
 test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente mensaje informa el pedido #1', async () => {
   const client = fakeClient();
   const sendText = client.sendText;

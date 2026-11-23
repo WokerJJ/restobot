@@ -76,11 +76,13 @@ export function createBot({
       const handoffAt = session.data?.handoffAt ?? session.updatedAt;
       if (t - session.updatedAt <= handoffTtlMs && t - handoffAt <= handoffMaxMs) {
         // El bot calla, pero el mensaje renueva el plazo: la persona puede seguir atendiendo.
-        store.saveSession(msg.from, { state: STATES.HUMANO, data: { ...session.data, handoffAt } }, t);
-        return { state: STATES.HUMANO, silenced: true };
+        if (store.touchHandoff(msg.from, t, handoffAt)) return { state: STATES.HUMANO, silenced: true };
+        // Otro proceso liberó el chat entre la lectura y la renovación: se sigue con lo guardado.
+        session = store.getSession(msg.from);
+      } else {
+        log.info?.(`derivación vencida, el bot retoma la conversación: ${maskPhone(msg.from)}`);
+        session = null;
       }
-      log.info?.(`derivación vencida, el bot retoma la conversación: ${maskPhone(msg.from)}`);
-      session = null;
     } else if (session && t - session.updatedAt > sessionTtlMs) {
       // Si había un pedido a medias, se explica por qué la conversación vuelve a empezar.
       abandoned = (session.data?.cart || []).length > 0;

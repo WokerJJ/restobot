@@ -36,6 +36,21 @@ test('las derivaciones se listan por handoffAt, aunque el cliente haya renovado 
   store.close();
 });
 
+test('touchHandoff renueva una derivación, pero no reactiva una sesión ya liberada', () => {
+  // Evita la carrera con `npm run derivaciones -- liberar`: solo actualiza si la fila sigue en 'humano'.
+  const store = openStore(':memory:');
+  store.saveSession('57', { state: 'humano', data: { handoffReason: 'frase', handoffAt: 1 } }, 1);
+  assert.equal(store.touchHandoff('57', 5, 1), true);
+  assert.deepEqual(store.getSession('57'), { state: 'humano', data: { handoffReason: 'frase', handoffAt: 1 }, updatedAt: 5 });
+
+  store.saveSession('58', { state: 'inicio', data: {} }, 1);
+  assert.equal(store.touchHandoff('58', 5, 1), false);
+  assert.deepEqual(store.getSession('58'), { state: 'inicio', data: {}, updatedAt: 1 });
+  assert.equal(store.touchHandoff('59', 5, 1), false, 'sin sesión tampoco crea una');
+  assert.equal(store.getSession('59'), null);
+  store.close();
+});
+
 test('lista las sesiones en un estado (p. ej. derivadas a una persona)', () => {
   const store = openStore(':memory:');
   store.saveSession('57', { state: 'humano', data: { reason: 'frase' } }, 2);
