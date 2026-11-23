@@ -125,6 +125,36 @@ test('una sesión abandonada por más de 3 horas vuelve a empezar', async () => 
   assert.match(client.sent.at(-1).body, /Bienvenido/);
 });
 
+test('si la sesión vencida tenía carrito, avisa que el pedido quedó sin terminar', async () => {
+  const { store, client, say, tap, tick } = setup();
+  await say('hola');
+  await tap('menu');
+  await tap('item:perro');
+  await tap('qty:2');
+  await tap('cart:checkout');
+  await tap('pickup');
+  await tap('pay:0');
+  const enviados = client.sent.length;
+  tick(SESSION_TTL_MS + 60_000);
+  await tap('confirm');
+  const nuevos = client.sent.slice(enviados);
+  assert.match(nuevos[0].body, /quedó sin terminar por inactividad/);
+  assert.match(nuevos[1].body, /Bienvenido/);
+  assert.equal(store.getOrder(1), undefined, 'un botón viejo no confirma el pedido vencido');
+});
+
+test('una sesión vencida con el carrito vacío no envía el aviso', async () => {
+  const { client, say, tap, tick } = setup();
+  await say('hola');
+  await tap('menu');
+  const enviados = client.sent.length;
+  tick(SESSION_TTL_MS + 1);
+  await say('hola');
+  const nuevos = client.sent.slice(enviados);
+  assert.ok(nuevos.every(m => !/sin terminar/.test(m.body)));
+  assert.match(nuevos[0].body, /Bienvenido/);
+});
+
 test('una derivación que nadie liberó vence a las 24 horas y el bot retoma', async () => {
   const { store, client, say, tick, logs } = setup();
   await say('hola');

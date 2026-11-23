@@ -57,11 +57,16 @@ export function createBot({ restaurant, store, client, log = console, now = Date
   async function handle(msg) {
     const t = now();
     let session = store.getSession(msg.from);
+    let abandoned = false;
     if (session?.state === STATES.HUMANO) {
       if (t - session.updatedAt <= handoffTtlMs) return { state: STATES.HUMANO, silenced: true };
       log.info?.(`derivación vencida, el bot retoma la conversación: ${maskPhone(msg.from)}`);
       session = null;
-    } else if (session && t - session.updatedAt > sessionTtlMs) session = null;
+    } else if (session && t - session.updatedAt > sessionTtlMs) {
+      // Si había un pedido a medias, se explica por qué la conversación vuelve a empezar.
+      abandoned = (session.data?.cart || []).length > 0;
+      session = null;
+    }
 
     // Sin conversación activa, primero se avisa de los pedidos cuya confirmación no llegó,
     // para que el cliente no vuelva a pedir lo mismo.
@@ -70,7 +75,9 @@ export function createBot({ restaurant, store, client, log = console, now = Date
       : [];
 
     const result = step(restaurant, session, msg);
-    let replies = result.replies;
+    let replies = abandoned
+      ? [{ kind: 'text', body: 'Tu pedido anterior quedó sin terminar por inactividad, así que empezamos de nuevo.' }, ...result.replies]
+      : result.replies;
     let orderId = null;
 
     if (result.order) {
