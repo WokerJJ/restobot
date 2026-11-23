@@ -4,6 +4,9 @@ import { loadEnv, loadRestaurant } from './config.js';
 import { openStore } from './store.js';
 import { verifySignature } from './whatsapp/signature.js';
 import { parseWebhook } from './whatsapp/parse.js';
+import { createWhatsAppClient, createDryRunClient } from './whatsapp/client.js';
+import { createBot } from './conversation/bot.js';
+import { createHandoffNotifier } from './notify.js';
 
 const MAX_BODY = 1_000_000;
 
@@ -68,10 +71,27 @@ export function createApp({ env, restaurant, store, onMessage = async () => {}, 
   });
 }
 
+/** Arma el cliente de envío: real si hay credenciales, de ensayo si no (nunca en producción). */
+export function createClient(env, log = console) {
+  if (env.accessToken && env.phoneNumberId) {
+    return createWhatsAppClient({ accessToken: env.accessToken, phoneNumberId: env.phoneNumberId, apiVersion: env.apiVersion });
+  }
+  if (env.nodeEnv === 'production') {
+    throw new Error('En producción son obligatorios WHATSAPP_ACCESS_TOKEN y WHATSAPP_PHONE_NUMBER_ID: el modo ensayo no responde a los clientes.');
+  }
+  log.warn?.('Sin WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID: modo ensayo, las respuestas solo se muestran en consola.');
+  return createDryRunClient(log);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = loadEnv();
   const restaurant = loadRestaurant(env.restaurantPath);
   const store = openStore(env.dbPath);
-  createApp({ env, restaurant, store }).listen(env.port, () =>
+  const notifyHandoff = createHandoffNotifier({
+    url: env.handoffWebhookUrl, restaurantName: restaurant.name, timeZone: restaurant.timezone
+  });
+  if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
+  const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff });
+  createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
 }

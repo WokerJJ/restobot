@@ -8,6 +8,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "simular": "node scripts/simular.js",
+    "derivaciones": "node scripts/derivaciones.js"
   }
 }

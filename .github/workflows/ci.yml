@@ -1,0 +1,39 @@
+# Integración continua: corre las pruebas en cada push y en cada PR hacia main.
+# El proyecto no tiene dependencias de ejecución ni de desarrollo, así que no hay
+# `npm ci`: basta con Node y `node --test`.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Solo lectura: el workflow no publica nada ni comenta en los PR.
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama cancela la ejecución anterior, que ya quedó vieja.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pruebas:
+    name: Pruebas (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.13.0 es el mínimo de package.json (node:sqlite sin bandera);
+        # 22.x y 24.x son las LTS en uso.
+        node: ['22.13.0', '22.x', '24.x']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Versión de Node
+        run: node --version
+      - name: Pruebas
+        run: node --test
