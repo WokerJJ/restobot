@@ -24,7 +24,7 @@ function setup(opts = {}) {
   const store = openStore(':memory:');
   const client = opts.client || fakeClient();
   const logs = [];
-  const log = { info: m => logs.push(m), warn: m => logs.push(m) };
+  const log = { info: m => logs.push(m), warn: m => logs.push(m), error: m => logs.push(m) };
   let clock = opts.start ?? 1_000_000;
   const bot = createBot({ restaurant, store, client, log, now: () => clock });
   let seq = 0;
@@ -143,6 +143,41 @@ test('una derivación que nadie liberó vence a las 24 horas y el bot retoma', a
   const aviso = logs.find(l => /derivación vencida/.test(l));
   assert.ok(aviso, 'se registra que la derivación venció');
   assert.ok(aviso.includes(maskPhone(CLIENTE)) && !aviso.includes(CLIENTE), 'el log no expone el teléfono');
+});
+
+test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente mensaje informa el pedido #1', async () => {
+  const client = fakeClient();
+  const sendText = client.sendText;
+  let fallar = true;
+  client.sendText = async (to, body) => {
+    if (fallar && /confirmado/.test(body)) { fallar = false; throw new Error('Cloud API caída'); }
+    return sendText(to, body);
+  };
+  const { store, say, tap, logs } = setup({ client });
+  await say('hola');
+  await tap('menu');
+  await tap('item:especial');
+  await tap('qty:2');
+  await tap('cart:checkout');
+  await tap('pickup');
+  await tap('pay:0');
+  await assert.rejects(tap('confirm'), /Cloud API caída/);
+
+  assert.equal(store.getOrder(1).status, 'sin_confirmar');
+  const error = logs.find(l => /#1/.test(l) && /confirmar/.test(l));
+  assert.ok(error, 'se registra el pedido sin confirmar');
+  assert.ok(error.includes(maskPhone(CLIENTE)) && !error.includes(CLIENTE), 'el log no expone el teléfono');
+
+  const enviados = client.sent.length;
+  await say('hola');
+  const nuevos = client.sent.slice(enviados);
+  assert.match(nuevos[0].body, /Tu pedido #1 ya quedó registrado \(total \$\s?26\.000\)/);
+  assert.match(nuevos[1].body, /Bienvenido/);
+  assert.equal(store.getOrder(1).status, 'recibido');
+  assert.equal(store.getOrder(2), undefined, 'no se creó un pedido duplicado');
+
+  await say('hola');
+  assert.doesNotMatch(client.sent.at(-2).body, /ya quedó registrado/, 'el aviso se envía una sola vez');
 });
 
 test('enmascara teléfonos', () => {

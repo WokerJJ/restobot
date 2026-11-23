@@ -2,6 +2,7 @@
 // flow.js decide; este módulo solo hace efectos (base de datos, red, logs).
 
 import { step, confirmedReplies, STATES } from './flow.js';
+import { formatCOP } from '../pricing.js';
 
 // Un carrito abandonado más de 3 horas se descarta y la conversación vuelve a empezar.
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
@@ -10,6 +11,9 @@ export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
 // Coincide con la ventana de atención de 24 h de Meta: pasado ese plazo, la persona ya
 // no puede responder con texto libre y el cliente quedaría sin respuesta para siempre.
 export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
+const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** "573001112233" → "57300***2233": los teléfonos son datos personales. */
 export const maskPhone = p => (String(p).length > 7 ? `${String(p).slice(0, 5)}***${String(p).slice(-4)}` : '***');
@@ -58,12 +62,19 @@ export function createBot({ restaurant, store, client, log = console, now = Date
       session = null;
     } else if (session && t - session.updatedAt > sessionTtlMs) session = null;
 
+    // Sin conversación activa, primero se avisa de los pedidos cuya confirmación no llegó,
+    // para que el cliente no vuelva a pedir lo mismo.
+    const unconfirmed = !session || session.state === STATES.INICIO
+      ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS)
+      : [];
+
     const result = step(restaurant, session, msg);
     let replies = result.replies;
+    let orderId = null;
 
     if (result.order) {
       // Pedido y sesión se guardan juntos: nunca queda un pedido sin cerrar la sesión ni al revés.
-      const orderId = store.transaction(() => {
+      orderId = store.transaction(() => {
         const id = store.createOrder(msg.from, result.order);
         store.saveSession(msg.from, { state: result.state, data: result.data }, t);
         return id;
@@ -76,8 +87,26 @@ export function createBot({ restaurant, store, client, log = console, now = Date
 
     if (result.handoff) log.warn?.(`derivación a una persona: ${maskPhone(msg.from)} (${result.handoff.reason})`);
 
+    for (const order of unconfirmed) {
+      await deliver(msg.from, {
+        kind: 'text',
+        body: `Tu pedido #${order.id} ya quedó registrado (total ${formatCOP(order.total)}). No pudimos confirmártelo antes por un problema de conexión; no hace falta que lo vuelvas a pedir.`
+      });
+      store.setOrderStatus(order.id, 'recibido');
+    }
+
     // Se envían en orden: WhatsApp no garantiza el orden si salen en paralelo.
-    for (const reply of replies) await deliver(msg.from, reply);
+    try {
+      for (const reply of replies) await deliver(msg.from, reply);
+    } catch (err) {
+      // El pedido ya está guardado pero el cliente no lo sabe: se marca para avisarle en su
+      // próximo mensaje (y para que el local lo vea en `npm run derivaciones`).
+      if (orderId) {
+        store.setOrderStatus(orderId, 'sin_confirmar');
+        log.error?.(`no se pudo confirmar el pedido #${orderId} a ${maskPhone(msg.from)}: ${err.message}`);
+      }
+      throw err;
+    }
     return result;
   }
 

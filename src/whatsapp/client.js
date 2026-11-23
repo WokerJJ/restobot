@@ -16,12 +16,13 @@ export const LIMITS = Object.freeze({
 });
 
 export class WhatsAppError extends Error {
-  constructor(message, { status, code, details } = {}) {
+  constructor(message, { status, code, details, retryable = false } = {}) {
     super(message);
     this.name = 'WhatsAppError';
     this.status = status;
     this.code = code;
     this.details = details;
+    this.retryable = retryable; // true si es transitorio y se puede reintentar sin riesgo
   }
 }
 
@@ -93,18 +94,19 @@ export function listPayload(to, body, button, sections) {
 
 /**
  * @param {{accessToken:string, phoneNumberId:string, apiVersion?:string, baseUrl?:string,
- *          fetch?:typeof fetch, timeoutMs?:number}} opts
+ *          fetch?:typeof fetch, timeoutMs?:number, retryDelaysMs?:number[]}} opts
+ *   retryDelaysMs: espera antes de cada reintento; su longitud es el número de reintentos.
  */
 export function createWhatsAppClient({
   accessToken, phoneNumberId, apiVersion = 'v23.0', baseUrl = 'https://graph.facebook.com',
-  fetch: fetchImpl = globalThis.fetch, timeoutMs = 10_000
+  fetch: fetchImpl = globalThis.fetch, timeoutMs = 10_000, retryDelaysMs = [500, 1500]
 }) {
   if (!accessToken || !phoneNumberId) {
     throw new WhatsAppError('Faltan WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID');
   }
   const url = `${baseUrl}/${apiVersion}/${encodeURIComponent(phoneNumberId)}/messages`;
 
-  async function post(payload) {
+  async function postOnce(payload) {
     let res;
     try {
       res = await fetchImpl(url, {
@@ -114,15 +116,30 @@ export function createWhatsAppClient({
         signal: AbortSignal.timeout(timeoutMs)
       });
     } catch (err) {
-      throw new WhatsAppError(`No se pudo contactar la Cloud API: ${err.message}`, { details: err });
+      // Un timeout no se reintenta: Meta no tiene clave de idempotencia y pudo haber recibido
+      // el mensaje; reintentarlo podría enviarlo dos veces. Otros fallos de red sí.
+      const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      throw new WhatsAppError(`No se pudo contactar la Cloud API: ${err.message}`, { details: err, retryable: !timedOut });
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       // Nunca incluir el token en el error: solo el código y el mensaje de Meta.
       throw new WhatsAppError(`Cloud API respondió ${res.status}: ${data?.error?.message || 'error desconocido'}`,
-        { status: res.status, code: data?.error?.code, details: data?.error });
+        { status: res.status, code: data?.error?.code, details: data?.error, retryable: res.status === 429 || res.status >= 500 });
     }
     return { id: data?.messages?.[0]?.id ?? null };
+  }
+
+  // Reintenta con espera creciente solo los errores transitorios (429, 5xx, red sin respuesta).
+  async function post(payload) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await postOnce(payload);
+      } catch (err) {
+        if (!err.retryable || attempt >= retryDelaysMs.length) throw err;
+        await new Promise(resolve => setTimeout(resolve, retryDelaysMs[attempt]));
+      }
+    }
   }
 
   return {

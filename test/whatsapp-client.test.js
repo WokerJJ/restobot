@@ -14,7 +14,20 @@ function fakeFetch(response = { status: 200, body: { messages: [{ id: 'wamid.OUT
   return fn;
 }
 
-const client = fetch => createWhatsAppClient({ accessToken: 'TOKEN', phoneNumberId: '123', apiVersion: 'v23.0', fetch });
+// Sin esperas entre reintentos para que las pruebas sean rápidas.
+const client = fetch => createWhatsAppClient({ accessToken: 'TOKEN', phoneNumberId: '123', apiVersion: 'v23.0', fetch, retryDelaysMs: [0, 0] });
+
+// fetch simulado que responde en orden: cada elemento es un { status, body } o un Error.
+function seqFetch(...responses) {
+  const fn = async () => {
+    const r = responses[Math.min(fn.calls++, responses.length - 1)];
+    if (r instanceof Error) throw r;
+    return new Response(JSON.stringify(r.body ?? {}), { status: r.status });
+  };
+  fn.calls = 0;
+  return fn;
+}
+const OK = { status: 200, body: { messages: [{ id: 'wamid.OK' }] } };
 
 test('envía texto al endpoint correcto con el token y devuelve el id', async () => {
   const fetch = fakeFetch();
@@ -88,4 +101,40 @@ test('el cliente de ensayo valida igual pero no llama a la red', async () => {
   assert.match((await c.sendText('57', 'hola')).id, /^dryrun\./);
   await assert.rejects(c.sendButtons('57', 'x', []), WhatsAppError);
   assert.equal(logs.length, 1);
+});
+
+test('reintenta un 503 y luego envía', async () => {
+  const fetch = seqFetch({ status: 503 }, OK);
+  assert.equal((await client(fetch).sendText('57', 'hola')).id, 'wamid.OK');
+  assert.equal(fetch.calls, 2);
+});
+
+test('reintenta 429', async () => {
+  const fetch = seqFetch({ status: 429, body: { error: { message: 'rate limit', code: 130429 } } }, OK);
+  assert.equal((await client(fetch).sendText('57', 'hola')).id, 'wamid.OK');
+  assert.equal(fetch.calls, 2);
+});
+
+test('reintenta un fallo de red antes de recibir respuesta', async () => {
+  const fetch = seqFetch(new TypeError('fetch failed'), OK);
+  assert.equal((await client(fetch).sendText('57', 'hola')).id, 'wamid.OK');
+  assert.equal(fetch.calls, 2);
+});
+
+test('no reintenta un 400', async () => {
+  const fetch = seqFetch({ status: 400, body: { error: { message: 'Invalid parameter', code: 100 } } }, OK);
+  await assert.rejects(client(fetch).sendText('57', 'hola'), { status: 400 });
+  assert.equal(fetch.calls, 1);
+});
+
+test('no reintenta un timeout: Meta pudo haber recibido el mensaje', async () => {
+  const fetch = seqFetch(new DOMException('The operation was aborted due to timeout', 'TimeoutError'), OK);
+  await assert.rejects(client(fetch).sendText('57', 'hola'), WhatsAppError);
+  assert.equal(fetch.calls, 1);
+});
+
+test('se rinde tras 2 reintentos', async () => {
+  const fetch = seqFetch({ status: 500 });
+  await assert.rejects(client(fetch).sendText('57', 'hola'), { name: 'WhatsAppError', status: 500 });
+  assert.equal(fetch.calls, 3);
 });

@@ -130,6 +130,21 @@ export function openStore(path = ':memory:') {
       const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
       return row && { ...row, data: JSON.parse(row.data) };
     },
+    setOrderStatus(id, status) {
+      return db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id).changes === 1;
+    },
+    ordersInStatus(status) {
+      return db.prepare('SELECT id, customer, total, created_at FROM orders WHERE status = ? ORDER BY id').all(status);
+    },
+    // Pedidos guardados cuya confirmación no llegó al cliente, de los últimos withinMs.
+    // created_at es TEXT UTC de datetime('now'): se compara con datetime('now', ...) en SQL.
+    pendingConfirmation(customer, withinMs) {
+      return db.prepare(`
+        SELECT id, total FROM orders
+        WHERE customer = ? AND status = 'sin_confirmar' AND created_at >= datetime('now', ?)
+        ORDER BY id
+      `).all(customer, `-${Math.floor(withinMs / 1000)} seconds`);
+    },
     getSession(customer) {
       const row = selectSession.get(customer);
       return row ? { state: row.state, data: JSON.parse(row.data), updatedAt: row.updated_at } : null;

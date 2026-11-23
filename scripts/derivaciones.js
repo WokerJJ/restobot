@@ -5,6 +5,7 @@
 import { loadEnv } from '../src/config.js';
 import { openStore } from '../src/store.js';
 import { releaseHandoff } from '../src/conversation/bot.js';
+import { formatCOP } from '../src/pricing.js';
 
 const [cmd = 'listar', phone] = process.argv.slice(2);
 const store = openStore(loadEnv().dbPath);
@@ -17,6 +18,10 @@ try {
       const since = new Date(s.updatedAt).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
       const items = (s.data.cart || []).reduce((n, l) => n + l.qty, 0);
       console.log(`${s.customer}  desde ${since}  motivo: ${s.data.handoffReason || '-'}  carrito: ${items} producto(s)`);
+    }
+    // Pedidos guardados cuya confirmación no llegó al cliente: el local debe confirmarlos a mano.
+    for (const o of store.ordersInStatus('sin_confirmar')) {
+      console.log(`Pedido #${o.id} sin confirmar al cliente: ${o.customer}  total ${formatCOP(o.total)}  creado ${o.created_at} UTC`);
     }
   } else if (cmd === 'liberar' && phone) {
     console.log(releaseHandoff(store, phone)
