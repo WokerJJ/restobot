@@ -84,10 +84,14 @@ export function openStore(path = ':memory:') {
       db.exec('BEGIN IMMEDIATE');
       try {
         const out = fn();
+        // Con una promesa, el COMMIT llegaría antes de que termine el trabajo asíncrono.
+        if (typeof out?.then === 'function') throw new Error('transaction() no admite funciones async');
         db.exec('COMMIT');
         return out;
       } catch (err) {
-        db.exec('ROLLBACK');
+        // Si SQLite ya revirtió por su cuenta (SQLITE_FULL, IOERR...), este ROLLBACK falla:
+        // se ignora para no tapar el error original.
+        try { db.exec('ROLLBACK'); } catch {}
         throw err;
       }
     },

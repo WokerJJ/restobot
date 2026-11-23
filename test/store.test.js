@@ -91,3 +91,34 @@ test('espera a que otro proceso suelte la escritura en vez de fallar (busy_timeo
     store.close();
   }
 });
+
+test('transaction rechaza funciones async y no deja nada guardado', () => {
+  const store = openStore(':memory:');
+  assert.throws(
+    () => store.transaction(async () => store.createOrder('57', { total: 9000, lines: [] })),
+    /transaction\(\) no admite funciones async/
+  );
+  assert.equal(store.getOrder(1), undefined);
+  // La conexión queda libre para la siguiente transacción.
+  assert.equal(store.getOrder(store.transaction(() => store.createOrder('57', { total: 9000, lines: [] }))).total, 9000);
+  store.close();
+});
+
+test('si SQLite ya revirtió la transacción, se conserva el error original', t => {
+  const path = tempDb(t);
+  const store = openStore(path);
+  // Un trigger con RAISE(ROLLBACK) hace que SQLite revierta por su cuenta, como con
+  // SQLITE_FULL o IOERR: el ROLLBACK del catch ya no tiene transacción que revertir.
+  const otra = new DatabaseSync(path);
+  otra.exec("CREATE TRIGGER disco_lleno BEFORE INSERT ON orders BEGIN SELECT RAISE(ROLLBACK, 'disco lleno simulado'); END;");
+  otra.close();
+  try {
+    assert.throws(
+      () => store.transaction(() => store.createOrder('57', { total: 9000, lines: [] })),
+      /disco lleno simulado/
+    );
+    assert.equal(store.getOrder(1), undefined);
+  } finally {
+    store.close();
+  }
+});
