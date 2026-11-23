@@ -131,8 +131,17 @@ test('el aviso se corta al vencer timeoutMs y no lanza', async () => {
   const fetch = (url, init) => new Promise((_, reject) => {
     init.signal.addEventListener('abort', () => reject(init.signal.reason));
   });
-  const log = logger();
-  const notify = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch, timeoutMs: 10, log });
-  assert.equal(await notify({ customer: CLIENTE, reason: 'boton', at: 0 }), false);
-  assert.equal(log.logs.length, 1);
+  // El temporizador de AbortSignal.timeout no mantiene vivo el proceso (está unref) y este
+  // fetch falso no abre ningún socket: sin algo que retenga el event loop, Node 22 da la
+  // promesa por perdida antes de que venza el timeout. Un fetch real sí retiene el loop con
+  // su socket, así que este temporizador solo imita eso durante la prueba.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const log = logger();
+    const notify = createHandoffNotifier({ url: URL_AVISO, restaurantName: 'X', fetch, timeoutMs: 10, log });
+    assert.equal(await notify({ customer: CLIENTE, reason: 'boton', at: 0 }), false);
+    assert.equal(log.logs.length, 1);
+  } finally {
+    clearInterval(keepAlive);
+  }
 });
