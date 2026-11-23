@@ -80,10 +80,12 @@ function findItemByText(restaurant, t) {
 
 // ---------------------------------------------------------------- mensajes por estado
 
+// El saludo va en un mensaje con botones (cuerpo de máximo 1024 caracteres): el nombre del
+// restaurante y el horario vienen de la configuración y se recortan para que siempre quepa.
 function greeting(restaurant, name) {
   const hi = name ? `¡Hola, ${clip(name, 30)}! 👋` : '¡Hola! 👋';
-  const body = `${hi} Bienvenido a ${restaurant.name}.` +
-    (restaurant.hours ? `\nHorario: ${restaurant.hours.replace(/\.$/, '')}.` : '') +
+  const body = `${hi} Bienvenido a ${clip(restaurant.name, 100)}.` +
+    (restaurant.hours ? `\nHorario: ${clip(restaurant.hours.replace(/\.$/, ''), 600)}.` : '') +
     '\n\n¿Qué quieres hacer?';
   return [{ kind: 'buttons', body, buttons: [{ id: 'menu', title: 'Hacer pedido' }, HUMAN_BUTTON] }];
 }
