@@ -1,5 +1,7 @@
 # restobot
 
+[![CI](https://github.com/WokerJJ/restobot/actions/workflows/ci.yml/badge.svg)](https://github.com/WokerJJ/restobot/actions/workflows/ci.yml)
+
 Asistente de WhatsApp para restaurantes: responde preguntas, toma pedidos (texto y notas de voz) y pasa a una persona cuando no está seguro. Usa la API oficial de Meta (WhatsApp Business Platform).
 
 > Estado: **Fase 2 — Conversación guiada** completa. Ver [docs/ROADMAP.md](docs/ROADMAP.md).
