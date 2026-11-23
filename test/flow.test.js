@@ -275,3 +275,70 @@ describe('robustez', () => {
     assert.equal(normalize('¡Menú, POR FAVOR!'), 'menu por favor');
   });
 });
+
+describe('ramas del flujo', () => {
+  test('"menú" desde inicio muestra la primera página del menú', () => {
+    const res = step(r, null, txt('menú'));
+    assert.equal(res.state, S.MENU);
+    assert.equal(res.replies[0].kind, 'list');
+    assert.deepEqual(res.data.cart, []);
+    assert.equal(res.data.menuPage, 1);
+  });
+
+  test('"ver mi carrito" desde el menú lleva al carrito', () => {
+    const res = step(r, conCarrito(S.MENU), btn('cart:view'));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(ids(res), ['cart:add', 'cart:checkout', 'cart:clear']);
+  });
+
+  test('la zona se puede elegir escribiendo su nombre', () => {
+    const res = step(r, conCarrito(S.ZONA), txt('centro'));
+    assert.equal(res.state, S.DIRECCION);
+    assert.equal(res.data.zoneId, 'centro');
+    assert.equal(res.data.pickup, false);
+  });
+
+  test('sin zona no se pide la dirección y sin pago no se confirma', () => {
+    const sinZona = step(r, conCarrito(S.DIRECCION), txt('Calle 10 # 5-20'));
+    assert.equal(sinZona.state, S.ZONA);
+    assert.equal(sinZona.data.address, undefined);
+    const sinPago = step(r, conCarrito(S.CONFIRMACION, { pickup: true }), btn('confirm'));
+    assert.equal(sinPago.state, S.PAGO);
+    assert.equal(sinPago.order, undefined);
+  });
+
+  test('si la configuración borra la zona o el medio de pago elegido, se vuelven a pedir', () => {
+    const sinCentro = validateRestaurant({ ...r, deliveryZones: r.deliveryZones.filter(z => z.id !== 'centro') });
+    const zona = step(sinCentro, conCarrito(S.PAGO, { pickup: false, zoneId: 'centro', address: 'Calle 1 # 2-3' }), btn('pay:0'));
+    assert.equal(zona.state, S.ZONA);
+    assert.equal(zona.data.zoneId, null);
+    assert.equal(zona.data.address, null);
+
+    const sinEfectivo = validateRestaurant({ ...r, payments: ['Transferencia'] });
+    const pago = step(sinEfectivo, conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' }), btn('confirm'));
+    assert.equal(pago.state, S.PAGO);
+    assert.equal(pago.data.payment, undefined);
+    assert.equal(pago.order, undefined);
+  });
+
+  test('un resumen de más de 1024 caracteres sale como texto y luego botones con cuerpo corto', () => {
+    const big = validateRestaurant({
+      ...r,
+      menu: Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, name: `Producto ${i} con un nombre bastante largo`.padEnd(40, '.'), price: 10_000 }))
+    });
+    const cart = big.menu.slice(0, 19).map(m => ({ itemId: m.id, qty: 1 }));
+
+    const carrito = step(big, ses(S.CANTIDAD, { cart, pending: 'p19' }), btn('qty:1'));
+    assert.equal(carrito.state, S.CARRITO);
+    assert.deepEqual(carrito.replies.map(x => x.kind), ['text', 'buttons']);
+    assert.ok(carrito.replies[0].body.length > 1024);
+    assert.match(carrito.replies[0].body, /Total: \$\s?200\.000/);
+    assert.equal(carrito.replies[1].body, '¿Qué hacemos?');
+
+    const resumen = step(big, ses(S.PAGO, { cart: [...cart, { itemId: 'p19', qty: 1 }], pickup: true }), btn('pay:0'));
+    assert.equal(resumen.state, S.CONFIRMACION);
+    assert.deepEqual(resumen.replies.map(x => x.kind), ['text', 'buttons']);
+    assert.equal(resumen.replies[1].body, '¿Confirmamos tu pedido?');
+    assert.deepEqual(ids(resumen), ['confirm', 'cart:edit', 'cancel']);
+  });
+});
