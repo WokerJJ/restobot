@@ -6,6 +6,11 @@ import { step, confirmedReplies, STATES } from './flow.js';
 // Un carrito abandonado más de 3 horas se descarta y la conversación vuelve a empezar.
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
 
+// Una derivación que nadie liberó vence a las 24 horas y el bot retoma la conversación.
+// Coincide con la ventana de atención de 24 h de Meta: pasado ese plazo, la persona ya
+// no puede responder con texto libre y el cliente quedaría sin respuesta para siempre.
+export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** "573001112233" → "57300***2233": los teléfonos son datos personales. */
 export const maskPhone = p => (String(p).length > 7 ? `${String(p).slice(0, 5)}***${String(p).slice(-4)}` : '***');
 
@@ -17,9 +22,9 @@ export function releaseHandoff(store, customer, now = Date.now()) {
 }
 
 /**
- * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number, sessionTtlMs?:number}} deps
+ * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number, sessionTtlMs?:number, handoffTtlMs?:number}} deps
  */
-export function createBot({ restaurant, store, client, log = console, now = Date.now, sessionTtlMs = SESSION_TTL_MS }) {
+export function createBot({ restaurant, store, client, log = console, now = Date.now, sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS }) {
   // Cola por cliente: los mensajes de una misma persona se procesan en orden, uno a la vez.
   // Hoy evita que las respuestas de dos toques seguidos se intercalen en el chat; cuando
   // step() sea asíncrono (IA, fase 3) evitará además que dos mensajes lean la misma sesión.
@@ -47,8 +52,11 @@ export function createBot({ restaurant, store, client, log = console, now = Date
   async function handle(msg) {
     const t = now();
     let session = store.getSession(msg.from);
-    if (session?.state === STATES.HUMANO) return { state: STATES.HUMANO, silenced: true };
-    if (session && t - session.updatedAt > sessionTtlMs) session = null;
+    if (session?.state === STATES.HUMANO) {
+      if (t - session.updatedAt <= handoffTtlMs) return { state: STATES.HUMANO, silenced: true };
+      log.info?.(`derivación vencida, el bot retoma la conversación: ${maskPhone(msg.from)}`);
+      session = null;
+    } else if (session && t - session.updatedAt > sessionTtlMs) session = null;
 
     const result = step(restaurant, session, msg);
     let replies = result.replies;

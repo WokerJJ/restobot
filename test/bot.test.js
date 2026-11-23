@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
 import { openStore } from '../src/store.js';
-import { createBot, releaseHandoff, maskPhone, SESSION_TTL_MS } from '../src/conversation/bot.js';
+import { createBot, releaseHandoff, maskPhone, SESSION_TTL_MS, HANDOFF_TTL_MS } from '../src/conversation/bot.js';
 
 const restaurant = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
 const CLIENTE = '573001112233';
@@ -123,6 +123,26 @@ test('una sesión abandonada por más de 3 horas vuelve a empezar', async () => 
   await say('2');
   assert.equal(store.getSession(CLIENTE).state, 'saludo');
   assert.match(client.sent.at(-1).body, /Bienvenido/);
+});
+
+test('una derivación que nadie liberó vence a las 24 horas y el bot retoma', async () => {
+  const { store, client, say, tick, logs } = setup();
+  await say('hola');
+  await say('quiero hablar con un asesor');
+  const enviados = client.sent.length;
+
+  tick(HANDOFF_TTL_MS);
+  await say('¿hay alguien?');
+  assert.equal(client.sent.length, enviados, 'dentro de las 24 h sigue en silencio');
+  assert.equal(store.getSession(CLIENTE).state, 'humano');
+
+  tick(1);
+  await say('hola de nuevo');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
+  assert.match(client.sent.at(-1).body, /Bienvenido/);
+  const aviso = logs.find(l => /derivación vencida/.test(l));
+  assert.ok(aviso, 'se registra que la derivación venció');
+  assert.ok(aviso.includes(maskPhone(CLIENTE)) && !aviso.includes(CLIENTE), 'el log no expone el teléfono');
 });
 
 test('enmascara teléfonos', () => {

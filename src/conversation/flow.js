@@ -27,7 +27,20 @@ const MISSES_BEFORE_OFFER = 2;
 const BODY_MAX = 1024;
 const HUMAN_BUTTON = { id: 'human', title: 'Hablar con persona' };
 
-const HUMAN_RE = /\b(asesora?|persona|humana?|agente|operadora?)\b|hablar con alguien/;
+// Derivación por frase: solo con intención explícita, para no derivar con frases como
+// "una salchipapa para cada persona" o "la recoge otra persona". Se evalúa sobre el
+// texto normalizado y vale si:
+//   - el mensaje es solo el destinatario: "asesor", "una persona", "humano";
+//   - un verbo de contacto va seguido de él o de "alguien": "quiero hablar con un asesor",
+//     "comunicame con alguien", "que me atienda una persona";
+//   - "quiero/necesito/quisiera/pido" va seguido directamente de él: "necesito una persona".
+const HUMAN_WHO = '(?:una? )?(?:persona|asesora?|humana?|agente|operadora?)';
+const HUMAN_RE = new RegExp(
+  `^${HUMAN_WHO}$` +
+  `|\\b(?:hablar|hablo|comunicar(?:me)?|comunicame|comuniqueme|contactar(?:me)?|pasar(?:me)?|pasame) con (?:${HUMAN_WHO}|alguien)\\b` +
+  `|\\b(?:atienda|atiendan|atender) (?:${HUMAN_WHO}|alguien)\\b` +
+  `|\\b(?:quiero|necesito|quisiera|pido) ${HUMAN_WHO}\\b`
+);
 const CANCEL_WORDS = new Set(['cancelar', 'cancela', 'cancelar pedido', 'cancelo']);
 const MENU_WORDS = new Set(['menu', 'ver menu', 'carta', 'la carta']);
 const YES_WORDS = new Set(['si', 'confirmar', 'confirmo', 'dale', 'listo', 'de una']);
@@ -303,7 +316,8 @@ export function step(restaurant, session, msg) {
 
   // Intenciones globales, válidas en cualquier estado.
   if (input.replyId === 'human') return handoff(restaurant, data, 'boton');
-  if (HUMAN_RE.test(input.t)) return handoff(restaurant, data, 'frase');
+  // En la dirección no se busca la frase: "preguntar por la persona de portería" es una referencia.
+  if (state !== S.DIRECCION && HUMAN_RE.test(input.t)) return handoff(restaurant, data, 'frase');
   if (input.replyId === 'cancel' || CANCEL_WORDS.has(input.t)) {
     return { state: S.INICIO, data: {}, replies: [text('Listo, cancelé el pedido. Escríbeme cuando quieras empezar de nuevo.')] };
   }

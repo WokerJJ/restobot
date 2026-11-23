@@ -168,6 +168,30 @@ describe('derivación a una persona', () => {
     }
   });
 
+  test('una frase solo deriva con intención explícita de hablar con alguien', () => {
+    for (const frase of ['quiero hablar con un asesor', 'necesito una persona', 'Asesor', 'que me atienda alguien']) {
+      assert.equal(step(r, conCarrito(S.CARRITO), txt(frase)).state, S.HUMANO, frase);
+    }
+    const casos = [
+      [conCarrito(S.MENU), 'una salchipapa para cada persona'],
+      [conCarrito(S.DIRECCION, { zoneId: 'centro' }), 'Calle 10 # 5-20, preguntar por la persona de portería'],
+      [conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' }), 'si, la recoge otra persona']
+    ];
+    for (const [sesion, frase] of casos) {
+      const res = step(r, sesion, txt(frase));
+      assert.notEqual(res.state, S.HUMANO, frase);
+      assert.equal(res.handoff, undefined, frase);
+    }
+  });
+
+  test('en la dirección la frase no deriva, pero el botón sí', () => {
+    const sesion = conCarrito(S.DIRECCION, { zoneId: 'centro' });
+    const res = step(r, sesion, txt('Carrera 7 # 12-30, preguntar por un asesor'));
+    assert.equal(res.state, S.PAGO);
+    assert.equal(res.data.address, 'Carrera 7 # 12-30, preguntar por un asesor');
+    assert.equal(step(r, sesion, btn('human')).state, S.HUMANO);
+  });
+
   test('en estado humano el bot no responde nada, ni a botones viejos', () => {
     for (const msg of [txt('hola'), btn('confirm'), btn('menu'), { type: 'audio' }]) {
       const res = step(r, ses(S.HUMANO, { handoffReason: 'boton' }), msg);
