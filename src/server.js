@@ -4,6 +4,8 @@ import { loadEnv, loadRestaurant } from './config.js';
 import { openStore } from './store.js';
 import { verifySignature } from './whatsapp/signature.js';
 import { parseWebhook } from './whatsapp/parse.js';
+import { createWhatsAppClient, createDryRunClient } from './whatsapp/client.js';
+import { createBot } from './conversation/bot.js';
 
 const MAX_BODY = 1_000_000;
 
@@ -68,10 +70,20 @@ export function createApp({ env, restaurant, store, onMessage = async () => {}, 
   });
 }
 
+/** Arma el cliente de envío: real si hay credenciales, de ensayo si no. */
+export function createClient(env, log = console) {
+  if (env.accessToken && env.phoneNumberId) {
+    return createWhatsAppClient({ accessToken: env.accessToken, phoneNumberId: env.phoneNumberId, apiVersion: env.apiVersion });
+  }
+  log.warn?.('Sin WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID: modo ensayo, las respuestas solo se muestran en consola.');
+  return createDryRunClient(log);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = loadEnv();
   const restaurant = loadRestaurant(env.restaurantPath);
   const store = openStore(env.dbPath);
-  createApp({ env, restaurant, store }).listen(env.port, () =>
+  const bot = createBot({ restaurant, store, client: createClient(env) });
+  createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
 }
