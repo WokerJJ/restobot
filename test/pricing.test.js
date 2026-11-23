@@ -42,3 +42,11 @@ test('rechaza datos inválidos', () => {
 test('el menú de ejemplo es válido y rechaza precios con decimales', () => {
   assert.throws(() => validateRestaurant({ name: 'x', menu: [{ id: 'a', price: 10.5 }] }));
 });
+
+test('valida zonas de domicilio y medios de pago', () => {
+  const base = { name: 'x', menu: [{ id: 'a', price: 1000 }], payments: ['Efectivo'] };
+  assert.doesNotThrow(() => validateRestaurant(base));
+  assert.throws(() => validateRestaurant({ ...base, deliveryZones: [{ id: 'z', name: 'Z', fee: 2500.5 }] }), /domicilio/);
+  assert.throws(() => validateRestaurant({ ...base, deliveryZones: [{ id: 'z', name: 'Z', fee: 1 }, { id: 'z', name: 'Y', fee: 1 }] }), /zona/);
+  assert.throws(() => validateRestaurant({ ...base, payments: [] }), /pago/);
+});

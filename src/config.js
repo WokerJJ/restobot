@@ -32,5 +32,16 @@ export function validateRestaurant(r) {
   for (const e of r.extras || []) {
     if (!Number.isInteger(e.price) || e.price < 0) throw new Error(`precio de extra inválido: ${e.id}`);
   }
+  const zoneIds = new Set();
+  for (const z of r.deliveryZones || []) {
+    if (!z.id || zoneIds.has(z.id)) throw new Error(`id de zona repetido o vacío: ${z.id}`);
+    zoneIds.add(z.id);
+    if (!z.name) throw new Error(`la zona ${z.id} necesita nombre`);
+    if (!Number.isInteger(z.fee) || z.fee < 0) throw new Error(`costo de domicilio inválido (use pesos enteros): ${z.id}`);
+  }
+  // La conversación guiada ofrece el pago con botones: tiene que haber al menos una opción.
+  if (!Array.isArray(r.payments) || !r.payments.length || !r.payments.every(p => typeof p === 'string' && p.trim())) {
+    throw new Error('restaurant.payments debe tener al menos un medio de pago');
+  }
   return r;
 }
