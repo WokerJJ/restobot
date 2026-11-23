@@ -32,6 +32,9 @@ export function validateRestaurant(r) {
   for (const e of r.extras || []) {
     if (!Number.isInteger(e.price) || e.price < 0) throw new Error(`precio de extra inválido: ${e.id}`);
   }
+  // Las zonas y los pagos se muestran en listas de WhatsApp (máximo 10 filas).
+  if ((r.deliveryZones || []).length > 9) throw new Error('máximo 9 zonas de domicilio (la lista agrega "Recoger en el local")');
+  if ((r.payments || []).length > 10) throw new Error('máximo 10 medios de pago');
   const zoneIds = new Set();
   for (const z of r.deliveryZones || []) {
     if (!z.id || zoneIds.has(z.id)) throw new Error(`id de zona repetido o vacío: ${z.id}`);
