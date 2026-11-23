@@ -161,18 +161,34 @@ test('una derivación que nadie liberó vence a las 24 horas y el bot retoma', a
   await say('quiero hablar con un asesor');
   const enviados = client.sent.length;
 
-  tick(HANDOFF_TTL_MS);
-  await say('¿hay alguien?');
-  assert.equal(client.sent.length, enviados, 'dentro de las 24 h sigue en silencio');
-  assert.equal(store.getSession(CLIENTE).state, 'humano');
-
-  tick(1);
+  tick(HANDOFF_TTL_MS + 1);
   await say('hola de nuevo');
+  assert.ok(client.sent.length > enviados, 'pasadas 24 h sin mensajes, el bot responde');
   assert.equal(store.getSession(CLIENTE).state, 'saludo');
   assert.match(client.sent.at(-1).body, /Bienvenido/);
   const aviso = logs.find(l => /derivación vencida/.test(l));
   assert.ok(aviso, 'se registra que la derivación venció');
   assert.ok(aviso.includes(maskPhone(CLIENTE)) && !aviso.includes(CLIENTE), 'el log no expone el teléfono');
+});
+
+test('cada mensaje del cliente durante la derivación renueva el plazo de 24 horas', async () => {
+  // Igual que la ventana de atención de Meta: cuenta desde el último mensaje del cliente.
+  const { store, client, say, tick } = setup();
+  await say('hola');
+  await say('quiero hablar con un asesor');
+  const enviados = client.sent.length;
+
+  tick(HANDOFF_TTL_MS - 1000);
+  await say('¿siguen ahí?');
+  tick(HANDOFF_TTL_MS - 1000);
+  await say('necesito cambiar la dirección');
+  assert.equal(client.sent.length, enviados, 'el bot sigue en silencio: el plazo se renovó');
+  assert.equal(store.getSession(CLIENTE).state, 'humano');
+  assert.equal(store.getSession(CLIENTE).data.handoffReason, 'frase', 'renovar no borra los datos de la derivación');
+
+  tick(HANDOFF_TTL_MS + 1);
+  await say('hola');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
 });
 
 test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente mensaje informa el pedido #1', async () => {

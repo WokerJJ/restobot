@@ -8,9 +8,9 @@ import { maskPhone } from '../privacy.js';
 // Un carrito abandonado más de 3 horas se descarta y la conversación vuelve a empezar.
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
 
-// Una derivación que nadie liberó vence a las 24 horas y el bot retoma la conversación.
-// Coincide con la ventana de atención de 24 h de Meta: pasado ese plazo, la persona ya
-// no puede responder con texto libre y el cliente quedaría sin respuesta para siempre.
+// Una derivación vence 24 horas después del último mensaje del cliente y el bot retoma.
+// Coincide con la ventana de atención de Meta, que también cuenta desde el último mensaje
+// del cliente: pasado ese plazo la persona ya no puede responder con texto libre.
 export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
 
 // Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
@@ -59,7 +59,11 @@ export function createBot({ restaurant, store, client, log = console, now = Date
     let session = store.getSession(msg.from);
     let abandoned = false;
     if (session?.state === STATES.HUMANO) {
-      if (t - session.updatedAt <= handoffTtlMs) return { state: STATES.HUMANO, silenced: true };
+      if (t - session.updatedAt <= handoffTtlMs) {
+        // El bot calla, pero el mensaje renueva el plazo: la persona puede seguir atendiendo.
+        store.saveSession(msg.from, { state: STATES.HUMANO, data: session.data }, t);
+        return { state: STATES.HUMANO, silenced: true };
+      }
       log.info?.(`derivación vencida, el bot retoma la conversación: ${maskPhone(msg.from)}`);
       session = null;
     } else if (session && t - session.updatedAt > sessionTtlMs) {
