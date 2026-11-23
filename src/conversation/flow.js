@@ -186,10 +186,15 @@ function go(restaurant, state, data, before = []) {
 }
 
 // La configuración puede cambiar entre mensajes: se descarta lo que ya no existe.
+// También lo que no tiene forma válida (datos corruptos), para no fallar en cada mensaje.
+// Una cantidad fuera de 1..MAX_QTY se descarta en vez de acotarse: acotarla cambiaría
+// en silencio lo que el cliente pidió y lo que se le cobra.
 function sanitize(restaurant, data) {
   const menu = new Set(restaurant.menu.map(m => m.id));
   const zones = new Set((restaurant.deliveryZones || []).map(z => z.id));
-  const out = { ...data, cart: (data.cart || []).filter(l => menu.has(l.itemId) && Number.isInteger(l.qty) && l.qty > 0) };
+  const base = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  const cart = Array.isArray(base.cart) ? base.cart : [];
+  const out = { ...base, cart: cart.filter(l => menu.has(l?.itemId) && Number.isInteger(l.qty) && l.qty >= 1 && l.qty <= MAX_QTY) };
   if (out.pending && !menu.has(out.pending)) delete out.pending;
   if (out.zoneId && !zones.has(out.zoneId)) { out.zoneId = null; out.address = null; }
   if (out.payment && !restaurant.payments.includes(out.payment)) delete out.payment;

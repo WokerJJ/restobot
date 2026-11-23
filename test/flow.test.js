@@ -222,6 +222,24 @@ describe('derivación a una persona', () => {
 });
 
 describe('robustez', () => {
+  test('un carrito corrupto no rompe la conversación: se descartan las líneas inválidas', () => {
+    for (const cart of [null, 'x', {}, [{ itemId: 'perro', qty: 999 }]]) {
+      const res = step(r, { state: S.CARRITO, data: { cart } }, txt('asdf'));
+      assert.equal(res.state, S.MENU, JSON.stringify(cart));
+      assert.deepEqual(res.data.cart, []);
+      assert.equal(res.replies[0].kind, 'list');
+    }
+    const mezcla = step(r, { state: S.CARRITO, data: { cart: [{ itemId: 'perro', qty: 999 }, { itemId: 'especial', qty: 2 }] } }, txt('asdf'));
+    assert.equal(mezcla.state, S.CARRITO);
+    assert.deepEqual(mezcla.data.cart, [{ itemId: 'especial', qty: 2 }]);
+    assert.match(bodies(mezcla), /Total: \$\s?26\.000/);
+    for (const data of [null, 'x', [1]]) {
+      const res = step(r, { state: S.MENU, data }, btn('item:perro'));
+      assert.equal(res.state, S.CANTIDAD, JSON.stringify(data));
+      assert.deepEqual(Object.keys(res.data).sort(), ['cart', 'misses', 'pending']);
+    }
+  });
+
   test('un botón viejo de otro paso no avanza el flujo', () => {
     const res = step(r, ses(S.MENU), btn('confirm'));
     assert.equal(res.state, S.MENU);

@@ -72,6 +72,15 @@ function migrate(db, transaction) {
   }
 }
 
+// sessions.data con JSON corrupto (bases de la fase 2 sin CHECK) no debe romper cada mensaje.
+function parseSessionData(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 export function openStore(path = ':memory:') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
@@ -147,13 +156,16 @@ export function openStore(path = ':memory:') {
     },
     getSession(customer) {
       const row = selectSession.get(customer);
-      return row ? { state: row.state, data: JSON.parse(row.data), updatedAt: row.updated_at } : null;
+      if (!row) return null;
+      const data = parseSessionData(row.data);
+      // Corrupta: se trata como inexistente y la conversación vuelve a empezar.
+      return data === undefined ? null : { state: row.state, data, updatedAt: row.updated_at };
     },
     saveSession(customer, { state, data = {} }, now = Date.now()) {
       upsertSession.run(customer, state, JSON.stringify(data), now);
     },
     sessionsInState(state) {
-      return selectByState.all(state).map(r => ({ customer: r.customer, data: JSON.parse(r.data), updatedAt: r.updated_at }));
+      return selectByState.all(state).map(r => ({ customer: r.customer, data: parseSessionData(r.data) ?? {}, updatedAt: r.updated_at }));
     },
     transaction,
     close: () => db.close()

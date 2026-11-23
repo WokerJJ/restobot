@@ -220,3 +220,21 @@ test('las restricciones CHECK rechazan sesiones y pedidos inválidos', t => {
     db.close();
   }
 });
+
+test('una sesión con JSON corrupto (base vieja sin CHECK) se trata como inexistente', t => {
+  const path = tempDb(t);
+  openStore(path).close();
+  const otra = new DatabaseSync(path);
+  otra.exec('PRAGMA ignore_check_constraints = ON');
+  otra.exec("INSERT INTO sessions (customer, state, data, updated_at) VALUES ('57', 'humano', '{', 1)");
+  otra.close();
+  const store = openStore(path);
+  try {
+    assert.equal(store.getSession('57'), null);
+    assert.deepEqual(store.sessionsInState('humano').map(s => [s.customer, s.data]), [['57', {}]]);
+    store.saveSession('57', { state: 'menu', data: { cart: [] } }, 2);
+    assert.equal(store.getSession('57').state, 'menu');
+  } finally {
+    store.close();
+  }
+});
