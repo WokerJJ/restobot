@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 export function loadEnv(env = process.env) {
   return {
+    nodeEnv: env.NODE_ENV || 'development',
     port: Number(env.PORT || 3000),
     verifyToken: env.WHATSAPP_VERIFY_TOKEN || '',
     appSecret: env.WHATSAPP_APP_SECRET || '',

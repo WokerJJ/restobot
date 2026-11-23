@@ -138,3 +138,26 @@ test('se rinde tras 2 reintentos', async () => {
   await assert.rejects(client(fetch).sendText('57', 'hola'), { name: 'WhatsAppError', status: 500 });
   assert.equal(fetch.calls, 3);
 });
+
+test('el log del modo ensayo no contiene el teléfono ni el contenido', async () => {
+  const logs = [];
+  const c = createDryRunClient({ info: (...a) => logs.push(a.join(' ')) });
+  const direccion = 'Calle 10 # 5-20, casa azul';
+  await c.sendText('573001112233', `Entrega: ${direccion}`);
+  await c.sendButtons('573001112233', `Domicilio a ${direccion}`, [{ id: 'confirm', title: 'Confirmar' }]);
+  assert.equal(logs.length, 2);
+  for (const l of logs) {
+    assert.doesNotMatch(l, /573001112233/);
+    assert.doesNotMatch(l, /Calle 10/);
+    assert.match(l, /57300\*\*\*2233/);
+  }
+  assert.match(logs[0], /texto, 35 caracteres/);
+});
+
+test('dos clientes de ensayo generan ids distintos', async () => {
+  const silencio = { info: () => {} };
+  const a = await createDryRunClient(silencio).sendText('57', 'hola');
+  const b = await createDryRunClient(silencio).sendText('57', 'hola');
+  assert.match(a.id, /^dryrun\./);
+  assert.notEqual(a.id, b.id);
+});

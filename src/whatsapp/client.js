@@ -1,6 +1,9 @@
 // Envío de mensajes por la WhatsApp Cloud API (API oficial de Meta).
 // Sin dependencias: usa el fetch nativo, que se puede inyectar para las pruebas.
 
+import { randomUUID } from 'node:crypto';
+import { maskPhone } from '../privacy.js';
+
 // Límites documentados por Meta para mensajes interactivos.
 export const LIMITS = Object.freeze({
   text: 4096,
@@ -155,14 +158,16 @@ export function createWhatsAppClient({
  * Sirve para correr el bot en local sin credenciales.
  */
 export function createDryRunClient(log = console) {
-  let n = 0;
-  const fake = (to, kind, payload) => {
-    log.info?.(`[ensayo] → ${to} (${kind})`, JSON.stringify(payload.interactive ?? payload.text));
-    return { id: `dryrun.${++n}` };
+  // Solo se registra el tipo y el tamaño: el contenido puede llevar nombre, dirección y total.
+  // El id es un UUID para no repetirse entre arranques (messages descarta ids repetidos).
+  const fake = (to, kind, body) => {
+    log.info?.(`[ensayo] → ${maskPhone(to)} (${kind}, ${body.length} caracteres)`);
+    return { id: `dryrun.${randomUUID()}` };
   };
+  // Se construye el payload igual que el cliente real para validar los límites de Meta.
   return {
-    sendText: async (to, body) => fake(to, 'texto', textPayload(to, body)),
-    sendButtons: async (to, body, buttons) => fake(to, 'botones', buttonsPayload(to, body, buttons)),
-    sendList: async (to, body, button, sections) => fake(to, 'lista', listPayload(to, body, button, sections))
+    sendText: async (to, body) => (textPayload(to, body), fake(to, 'texto', body)),
+    sendButtons: async (to, body, buttons) => (buttonsPayload(to, body, buttons), fake(to, 'botones', body)),
+    sendList: async (to, body, button, sections) => (listPayload(to, body, button, sections), fake(to, 'lista', body))
   };
 }

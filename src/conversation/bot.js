@@ -3,6 +3,7 @@
 
 import { step, confirmedReplies, STATES } from './flow.js';
 import { formatCOP } from '../pricing.js';
+import { maskPhone } from '../privacy.js';
 
 // Un carrito abandonado más de 3 horas se descarta y la conversación vuelve a empezar.
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
@@ -15,8 +16,8 @@ export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
 // Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
 const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** "573001112233" → "57300***2233": los teléfonos son datos personales. */
-export const maskPhone = p => (String(p).length > 7 ? `${String(p).slice(0, 5)}***${String(p).slice(-4)}` : '***');
+// Se reexporta para quien ya lo importaba desde aquí.
+export { maskPhone };
 
 /** Devuelve la conversación al bot después de que una persona atendió al cliente. */
 export function releaseHandoff(store, customer, now = Date.now()) {

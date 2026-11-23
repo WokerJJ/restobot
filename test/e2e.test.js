@@ -85,3 +85,9 @@ test('sin credenciales el servidor usa el cliente de ensayo', async () => {
   assert.match((await client.sendText(CLIENTE, 'hola')).id, /^dryrun\./);
   assert.match(warns[0], /modo ensayo/);
 });
+
+test('en producción sin credenciales el servidor no arranca en modo ensayo', () => {
+  const log = { warn: () => {}, info: () => {} };
+  assert.throws(() => createClient({ accessToken: '', phoneNumberId: '', nodeEnv: 'production' }, log), /WHATSAPP_ACCESS_TOKEN/);
+  assert.throws(() => createClient({ accessToken: 'TOKEN', phoneNumberId: '', nodeEnv: 'production' }, log), /producción/);
+});

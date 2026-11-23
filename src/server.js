@@ -70,10 +70,13 @@ export function createApp({ env, restaurant, store, onMessage = async () => {}, 
   });
 }
 
-/** Arma el cliente de envío: real si hay credenciales, de ensayo si no. */
+/** Arma el cliente de envío: real si hay credenciales, de ensayo si no (nunca en producción). */
 export function createClient(env, log = console) {
   if (env.accessToken && env.phoneNumberId) {
     return createWhatsAppClient({ accessToken: env.accessToken, phoneNumberId: env.phoneNumberId, apiVersion: env.apiVersion });
+  }
+  if (env.nodeEnv === 'production') {
+    throw new Error('En producción son obligatorios WHATSAPP_ACCESS_TOKEN y WHATSAPP_PHONE_NUMBER_ID: el modo ensayo no responde a los clientes.');
   }
   log.warn?.('Sin WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID: modo ensayo, las respuestas solo se muestran en consola.');
   return createDryRunClient(log);
