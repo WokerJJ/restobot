@@ -327,7 +327,7 @@ export function step(restaurant, session, msg) {
     if (state === S.INICIO) return { state: S.SALUDO, data: { cart: [] }, replies: [note, ...greeting(restaurant, msg.name)] };
     return go(restaurant, state, data, [note]);
   }
-  if (MENU_WORDS.has(input.t) && state !== S.MENU) return go(restaurant, S.MENU, { ...data, menuPage: 1 });
+  if (MENU_WORDS.has(input.t)) return go(restaurant, S.MENU, { ...data, menuPage: 1 });
 
   if (state === S.INICIO) return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
 

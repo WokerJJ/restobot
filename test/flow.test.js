@@ -14,6 +14,15 @@ const ids = res => res.replies.flatMap(x => x.buttons ?? x.sections?.flatMap(s =
 const conCarrito = (state, extra = {}) => ses(state, { cart: [{ itemId: 'especial', qty: 2 }], ...extra });
 
 describe('saludo y menú', () => {
+  test('escribir "menú" estando en el menú lo vuelve a mostrar sin contar un fallo', () => {
+    const res = step(r, ses(S.MENU, { menuPage: 2, misses: 1 }), txt('Menú'));
+    assert.equal(res.state, S.MENU);
+    assert.equal(res.replies[0].kind, 'list');
+    assert.equal(res.data.menuPage, 1);
+    assert.equal(res.data.misses, 0);
+    assert.doesNotMatch(bodies(res), /No te entendí/);
+  });
+
   test('inicio → saludo con nombre, horario y botones', () => {
     const res = step(r, null, { ...txt('hola'), name: 'Ana' });
     assert.equal(res.state, S.SALUDO);
