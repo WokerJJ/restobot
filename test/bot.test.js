@@ -1,0 +1,131 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { validateRestaurant } from '../src/config.js';
+import { openStore } from '../src/store.js';
+import { createBot, releaseHandoff, maskPhone, SESSION_TTL_MS } from '../src/conversation/bot.js';
+
+const restaurant = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
+const CLIENTE = '573001112233';
+
+// Cliente de WhatsApp simulado: guarda lo que el bot enviaría. delays: demora por tipo.
+function fakeClient({ delays = {} } = {}) {
+  const sent = [];
+  let n = 0;
+  const record = kind => async (to, body, ...rest) => {
+    if (delays[kind]) await new Promise(r => setTimeout(r, delays[kind]));
+    sent.push({ to, kind, body, rest });
+    return { id: `wamid.out.${++n}` };
+  };
+  return { sent, sendText: record('text'), sendButtons: record('buttons'), sendList: record('list') };
+}
+
+function setup(opts = {}) {
+  const store = openStore(':memory:');
+  const client = opts.client || fakeClient();
+  const logs = [];
+  const log = { info: m => logs.push(m), warn: m => logs.push(m) };
+  let clock = opts.start ?? 1_000_000;
+  const bot = createBot({ restaurant, store, client, log, now: () => clock });
+  let seq = 0;
+  const msg = (extra) => ({ id: `wamid.in.${++seq}`, from: CLIENTE, name: 'Ana', ...extra });
+  const say = text => bot.onMessage(msg({ type: 'text', text }));
+  const tap = replyId => bot.onMessage(msg({ type: 'interactive', replyId }));
+  return { store, client, logs, bot, say, tap, msg, tick: ms => { clock += ms; } };
+}
+
+test('flujo completo: del saludo al pedido guardado y confirmado', async () => {
+  const { store, client, say, tap, logs } = setup();
+  await say('hola');
+  await tap('menu');
+  await tap('item:especial');
+  await tap('qty:2');
+  await tap('cart:add');
+  await tap('item:gaseosa');
+  await say('1');
+  await tap('cart:checkout');
+  await tap('zone:centro');
+  await say('Calle 10 # 5-20, casa azul');
+  await tap('pay:0');
+
+  const resumen = client.sent.at(-1);
+  assert.equal(resumen.kind, 'buttons');
+  assert.match(resumen.body, /2 × Perro especial: \$\s?26\.000/);
+  assert.match(resumen.body, /1 × Gaseosa 400 ml: \$\s?4\.000/);
+  assert.match(resumen.body, /Total: \$\s?33\.000/);
+
+  await tap('confirm');
+  const order = store.getOrder(1);
+  assert.equal(order.total, 33000);
+  assert.equal(order.customer, CLIENTE);
+  assert.equal(order.data.delivery, 3000);
+  assert.equal(order.data.address, 'Calle 10 # 5-20, casa azul');
+  assert.equal(order.data.payment, 'Efectivo');
+  assert.match(client.sent.at(-1).body, /Pedido #1 confirmado/);
+  assert.equal(store.getSession(CLIENTE).state, 'inicio');
+  assert.ok(logs.some(l => /pedido #1/.test(l) && !l.includes(CLIENTE)), 'el log no expone el teléfono');
+
+  // Lo enviado queda en el historial junto con lo recibido.
+  assert.ok(store.history(CLIENTE, 100).some(m => m.direction === 'out' && /Pedido #1/.test(m.body)));
+});
+
+test('al derivar, el bot avisa una vez y luego guarda silencio hasta que lo liberan', async () => {
+  const { store, client, say, tap, logs } = setup();
+  await say('hola');
+  await say('quiero hablar con una persona');
+  assert.match(client.sent.at(-1).body, /te comunico con una persona/);
+  assert.ok(logs.some(l => /derivación/.test(l)));
+  const enviados = client.sent.length;
+
+  await say('¿hola?');
+  await tap('menu');
+  assert.equal(client.sent.length, enviados, 'no responde mientras atiende una persona');
+  assert.equal(store.sessionsInState('humano').length, 1);
+
+  assert.equal(releaseHandoff(store, CLIENTE), true);
+  assert.equal(releaseHandoff(store, CLIENTE), false);
+  await say('gracias');
+  assert.match(client.sent.at(-1).body, /Bienvenido/);
+});
+
+test('las respuestas de mensajes simultáneos de un cliente no se intercalan', async () => {
+  // Los textos tardan más en salir: sin la cola, el botón del 2.º mensaje saldría
+  // en medio de las dos respuestas del 1.º.
+  const { store, client, bot, msg, say, tap } = setup({ client: fakeClient({ delays: { text: 20 } }) });
+  await say('hola');
+  await tap('menu');
+  client.sent.length = 0;
+  await Promise.all([
+    bot.onMessage(msg({ type: 'audio', mediaId: 'M1' })),               // → texto + lista
+    bot.onMessage(msg({ type: 'interactive', replyId: 'item:perro' }))  // → botones de cantidad
+  ]);
+  assert.deepEqual(client.sent.map(s => s.kind), ['text', 'list', 'buttons']);
+  assert.equal(store.getSession(CLIENTE).state, 'cantidad');
+});
+
+test('un error al enviar no bloquea los mensajes siguientes del cliente', async () => {
+  const client = fakeClient();
+  let fallar = true;
+  const sendButtons = client.sendButtons;
+  client.sendButtons = async (...a) => { if (fallar) { fallar = false; throw new Error('Cloud API caída'); } return sendButtons(...a); };
+  const { say, tap } = setup({ client });
+  await assert.rejects(say('hola'), /Cloud API caída/);
+  await tap('menu');
+  assert.equal(client.sent.at(-1).kind, 'list');
+});
+
+test('una sesión abandonada por más de 3 horas vuelve a empezar', async () => {
+  const { store, client, say, tap, tick } = setup();
+  await say('hola');
+  await tap('menu');
+  await tap('item:perro');
+  tick(SESSION_TTL_MS + 1);
+  await say('2');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
+  assert.match(client.sent.at(-1).body, /Bienvenido/);
+});
+
+test('enmascara teléfonos', () => {
+  assert.equal(maskPhone('573001112233'), '57300***2233');
+  assert.equal(maskPhone('123'), '***');
+});
