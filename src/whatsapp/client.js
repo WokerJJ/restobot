@@ -126,9 +126,11 @@ export function createWhatsAppClient({
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      // Nunca incluir el token en el error: solo el código y el mensaje de Meta.
-      throw new WhatsAppError(`Cloud API respondió ${res.status}: ${data?.error?.message || 'error desconocido'}`,
-        { status: res.status, code: data?.error?.code, details: data?.error, retryable: res.status === 429 || res.status >= 500 });
+      // Nunca incluir el token en el error: Meta a veces repite lo recibido en su mensaje,
+      // así que se borra del error de Meta antes de guardarlo en message y details.
+      const metaError = data?.error && JSON.parse(JSON.stringify(data.error).split(accessToken).join('***'));
+      throw new WhatsAppError(`Cloud API respondió ${res.status}: ${metaError?.message || 'error desconocido'}`,
+        { status: res.status, code: metaError?.code, details: metaError, retryable: res.status === 429 || res.status >= 500 });
     }
     return { id: data?.messages?.[0]?.id ?? null };
   }

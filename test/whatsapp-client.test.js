@@ -77,12 +77,16 @@ test('valida los límites de WhatsApp antes de llamar a la API', async () => {
 });
 
 test('convierte los errores de Meta en WhatsAppError sin exponer el token', async () => {
-  const fetch = fakeFetch({ status: 400, body: { error: { message: 'Invalid parameter', code: 100 } } });
+  // Meta a veces repite en el error lo que recibió, incluido el token.
+  const fetch = fakeFetch({ status: 400, body: { error: { message: 'Invalid OAuth access token TOKEN', code: 100, error_data: { details: 'Bearer TOKEN' } } } });
   const err = await client(fetch).sendText('57', 'hola').catch(e => e);
   assert.ok(err instanceof WhatsAppError);
   assert.equal(err.status, 400);
   assert.equal(err.code, 100);
+  assert.match(err.message, /Invalid OAuth access token/);
   assert.doesNotMatch(err.message, /TOKEN/);
+  assert.doesNotMatch(JSON.stringify(err), /TOKEN/);
+  assert.doesNotMatch(JSON.stringify(err.details), /TOKEN/);
 });
 
 test('los fallos de red también son WhatsAppError', async () => {
