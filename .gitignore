@@ -3,3 +3,7 @@ node_modules/
 data/*.db
 data/*.db-*
 config/restaurant.json
+
+# Memoria de trabajo de los agentes y archivos sueltos
+.claude/agentes/
+*.zip
