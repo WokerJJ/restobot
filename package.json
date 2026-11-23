@@ -1,0 +1,13 @@
+{
+  "name": "restobot",
+  "version": "0.1.0",
+  "description": "Asistente de WhatsApp para restaurantes: toma pedidos y responde preguntas (Meta Cloud API).",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  }
+}

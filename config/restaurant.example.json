@@ -1,0 +1,22 @@
+{
+  "name": "Restaurante de ejemplo",
+  "currency": "COP",
+  "timezone": "America/Bogota",
+  "hours": "Lunes a domingo, 5:00 p. m. a 10:00 p. m.",
+  "payments": ["Efectivo", "Transferencia"],
+  "etaMinutes": [25, 35],
+  "deliveryZones": [
+    { "id": "centro", "name": "Centro", "fee": 3000 },
+    { "id": "norte", "name": "Barrios del norte", "fee": 5000 }
+  ],
+  "menu": [
+    { "id": "perro", "name": "Perro sencillo", "price": 9000, "aliases": ["perro", "perro caliente"] },
+    { "id": "especial", "name": "Perro especial", "price": 13000, "aliases": ["perro especial", "especial"] },
+    { "id": "salchipapa", "name": "Salchipapa", "price": 15000, "aliases": ["salchipapa", "salchi"] },
+    { "id": "gaseosa", "name": "Gaseosa 400 ml", "price": 4000, "aliases": ["gaseosa", "bebida"] }
+  ],
+  "extras": [
+    { "id": "queso", "name": "Queso extra", "price": 2000 },
+    { "id": "tocineta", "name": "Tocineta", "price": 3000 }
+  ]
+}
