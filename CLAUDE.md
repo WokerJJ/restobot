@@ -8,7 +8,7 @@ Asistente de WhatsApp para restaurantes que usa la Cloud API oficial de Meta: to
 - Chat en la terminal, sin Meta ni credenciales: `npm run simular`.
 - Derivaciones y pedidos sin confirmar: `npm run derivaciones`. Para liberar un chat: `npm run derivaciones -- liberar <teléfono>`.
 - Servidor: `npm start`. Si no hay credenciales, arranca en modo ensayo; con `NODE_ENV=production` se niega a arrancar.
-- Evaluación: `npm run evaluar` (reglas). `npm run evaluar -- claude` llama a la API real y cuesta dinero: solo con autorización expresa del usuario.
+- Evaluación: `npm run evaluar` (reglas). `npm run evaluar -- claude` solo muestra el costo máximo; con `--confirmar` llama a la API real y cuesta dinero: solo con autorización expresa del usuario.
 
 ## Reglas del proyecto
 
