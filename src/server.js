@@ -7,6 +7,7 @@ import { parseWebhook } from './whatsapp/parse.js';
 import { createWhatsAppClient, createDryRunClient } from './whatsapp/client.js';
 import { createBot } from './conversation/bot.js';
 import { createHandoffNotifier } from './notify.js';
+import { createClaudeInterpreter } from './ai/claude.js';
 
 const MAX_BODY = 1_000_000;
 
@@ -83,6 +84,15 @@ export function createClient(env, log = console) {
   return createDryRunClient(log);
 }
 
+/** Intérprete de IA para texto libre si hay clave; sin ella, el bot usa solo las reglas. */
+export function createInterpreter(env, log = console) {
+  if (!env.anthropicApiKey) {
+    log.warn?.('Sin ANTHROPIC_API_KEY: el bot entiende botones y texto simple, pero no pedidos en texto libre.');
+    return null;
+  }
+  return createClaudeInterpreter({ apiKey: env.anthropicApiKey, model: env.aiModel, effort: env.aiEffort });
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const env = loadEnv();
   const restaurant = loadRestaurant(env.restaurantPath);
@@ -91,7 +101,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     url: env.handoffWebhookUrl, restaurantName: restaurant.name, timeZone: restaurant.timezone
   });
   if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
-  const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff });
+  const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff, interpretAI: createInterpreter(env) });
   createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
 }

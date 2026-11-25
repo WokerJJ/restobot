@@ -10,6 +10,9 @@ export function loadEnv(env = process.env) {
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || '',
     apiVersion: env.WHATSAPP_API_VERSION || 'v27.0',
     handoffWebhookUrl: env.HANDOFF_WEBHOOK_URL || '',
+    anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    aiModel: env.AI_MODEL || 'claude-opus-5-5',
+    aiEffort: env.AI_EFFORT || 'low',
     dbPath: env.DB_PATH || 'data/restobot.db',
     restaurantPath: env.RESTAURANT_CONFIG || 'config/restaurant.json'
   };

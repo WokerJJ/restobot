@@ -2,6 +2,7 @@
 // flow.js decide; este módulo solo hace efectos (base de datos, red, logs).
 
 import { step, confirmedReplies, STATES } from './flow.js';
+import { interpret } from './interpret.js';
 import { formatCOP } from '../pricing.js';
 import { maskPhone } from '../privacy.js';
 
@@ -37,11 +38,12 @@ export function releaseHandoff(store, customer, now = Date.now()) {
  *          notifyHandoff?:(h:{customer:string, reason:string, cartItems:number, at:number,
  *                             ttlHours:number, expiresAt:number}) => Promise<boolean>}} deps
  *   notifyHandoff: aviso al local cuando un cliente pide una persona (ver src/notify.js).
+ *   interpretAI: intérprete de texto libre (ver src/ai/claude.js); sin él, solo reglas.
  */
 export function createBot({
   restaurant, store, client, log = console, now = Date.now,
   sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, handoffMaxMs = HANDOFF_MAX_MS,
-  notifyHandoff = async () => false
+  notifyHandoff = async () => false, interpretAI = null
 }) {
   // Cola por cliente: los mensajes de una misma persona se procesan en orden, uno a la vez.
   // Hoy evita que las respuestas de dos toques seguidos se intercalen en el chat; cuando
@@ -96,7 +98,22 @@ export function createBot({
       ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS)
       : [];
 
-    const result = step(restaurant, session, msg);
+    // La IA solo recibe texto que las reglas no entienden: los botones, el audio y las frases
+    // simples van por reglas, sin costo ni espera. Si la IA falla, se sigue como si no hubiera
+    // entendido. step valida su intención con el contrato de la IA antes de aplicarla.
+    let intent;
+    if (interpretAI && msg.type === 'text') {
+      const state = Object.values(STATES).includes(session?.state) ? session.state : STATES.INICIO;
+      if (state !== STATES.HUMANO && interpret(restaurant, state, msg) === null) {
+        try {
+          intent = (await interpretAI(restaurant, state, msg, { data: session?.data || {} })) ?? null;
+        } catch (err) {
+          log.warn?.(`la IA no respondió (${maskPhone(msg.from)}): ${err.message}`);
+        }
+      }
+    }
+
+    const result = step(restaurant, session, msg, intent === undefined ? {} : { intent });
     // flow.js no conoce el reloj: el inicio de la derivación se anota aquí.
     const data = result.handoff ? { ...result.data, handoffAt: t } : result.data;
     let replies = abandoned
