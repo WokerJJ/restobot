@@ -156,7 +156,17 @@ export function answerQuestion(restaurant, topic) {
       if (eta) return [text(`⏱️ Un pedido tarda entre ${eta[0]} y ${eta[1]} minutos.`)];
       break;
   }
-  return [{ kind: 'buttons', body: 'No tengo esa información a la mano. Si quieres, te comunico con una persona del equipo.', buttons: [HUMAN_BUTTON] }];
+  return [{ kind: 'buttons', body: `${NO_INFO} Si quieres, te comunico con una persona del equipo.`, buttons: [HUMAN_BUTTON] }];
+}
+
+const NO_INFO = 'No tengo esa información a la mano.';
+
+// La respuesta a una pregunta que llega como primer mensaje, antes del saludo, sin repetir lo que
+// el saludo ya trae (EVA-035): el horario va en el saludo y el saludo ya ofrece hablar con una persona.
+function firstAnswer(restaurant, topic) {
+  if (topic === 'horario' && restaurant.hours) return [];
+  const answer = answerQuestion(restaurant, topic);
+  return answer[0].kind === 'buttons' ? [text(NO_INFO)] : answer;
 }
 
 /** Mensaje final, una vez guardado el pedido con su número. */
@@ -540,7 +550,7 @@ export function step(restaurant, session, msg, { intent } = {}) {
   if (state === S.INICIO) {
     // Una pregunta como primer mensaje ("¿a qué hora cierran?"): se responde y se saluda.
     if (it?.type === 'question') {
-      return { state: S.SALUDO, data: { cart: [] }, replies: [...answerQuestion(restaurant, it.topic), ...greeting(restaurant, msg.name)] };
+      return { state: S.SALUDO, data: { cart: [] }, replies: [...firstAnswer(restaurant, it.topic), ...greeting(restaurant, msg.name)] };
     }
     // "Buenas, me regala 2 salchipapas" como primer mensaje: se saluda y se arma el pedido.
     // Si se pasa de un tope o no quedó ninguna línea válida, se saluda con los avisos: el

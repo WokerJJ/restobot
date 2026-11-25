@@ -728,10 +728,27 @@ describe('preguntas frecuentes (question)', () => {
   });
 
   test('como primer mensaje, responde y saluda', () => {
-    const res = ask(S.INICIO, 'horario');
+    const res = ask(S.INICIO, 'pagos');
     assert.equal(res.state, S.SALUDO);
-    assert.match(res.replies[0].body, /horario/);
+    assert.match(res.replies[0].body, /Recibimos/);
     assert.match(bodies(res), /Bienvenido/);
+  });
+
+  test('como primer mensaje, no repite el horario ni el botón de persona (EVA-035)', () => {
+    const veces = (s, re) => (s.match(re) || []).length;
+    const horario = ask(S.INICIO, 'horario');
+    assert.equal(horario.state, S.SALUDO);
+    assert.equal(veces(bodies(horario), /horario/gi), 1, 'el saludo ya trae el horario');
+    assert.equal(ids(horario).filter(id => id === 'human').length, 1);
+
+    const sin = validateRestaurant({ ...r, hours: undefined, etaMinutes: undefined });
+    for (const [rest, topic] of [[r, 'otro'], [sin, 'horario'], [sin, 'tiempo']]) {
+      const res = step(rest, null, txt('x'), { intent: { type: 'question', topic } });
+      assert.equal(res.state, S.SALUDO, topic);
+      assert.match(res.replies[0].body, /^No tengo esa información a la mano\.$/, topic);
+      assert.equal(ids(res).filter(id => id === 'human').length, 1, `${topic}: el saludo ya ofrece una persona`);
+      assert.match(bodies(res), /Bienvenido/, topic);
+    }
   });
 
   test('si falta el dato o el tema es otro, lo dice y ofrece una persona sin derivar', () => {
