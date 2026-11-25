@@ -58,3 +58,19 @@ test('una intención que no corresponde al paso, o null, se trata como "no enten
     assert.equal(res.order, undefined);
   }
 });
+
+test('step valida la intención dada: una mal formada se trata como "no entendí" (BUG-013)', () => {
+  const menu = step(r, { state: S.MENU, data: { cart: [], menuPage: 2 } }, txt('x'), { intent: { type: 'menu_page', page: 'x' } });
+  assert.equal(menu.state, S.MENU);
+  assert.match(menu.replies[0].body, /No te entendí/);
+  assert.equal(menu.data.menuPage, 2, 'conserva la página en la que estaba');
+
+  const dir = { state: S.DIRECCION, data: { cart: [{ itemId: 'perro', qty: 1 }], zoneId: 'centro' } };
+  const address = step(r, dir, txt('x'), { intent: { type: 'address', text: {} } });
+  assert.equal(address.state, S.DIRECCION);
+  assert.equal(address.data.address, undefined);
+
+  const human = step(r, { state: S.MENU, data: { cart: [] } }, txt('x'), { intent: { type: 'human' } });
+  assert.equal(human.state, S.MENU);
+  assert.equal(human.handoff, undefined);
+});

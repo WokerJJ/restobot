@@ -9,6 +9,7 @@
 import { priceOrder, describeOrder, formatCOP } from '../pricing.js';
 import { STATES, MAX_QTY } from './states.js';
 import { interpret, normalize } from './interpret.js';
+import { validateIntent } from './intents.js';
 
 // Se reexportan para quien ya los importaba desde aquí.
 export { STATES, MAX_QTY, normalize };
@@ -254,8 +255,9 @@ function miss(restaurant, state, data) {
  * @param {object} restaurant  configuración validada
  * @param {{state:string, data:object}|null} session
  * @param {{type:string, text?:string, replyId?:string, name?:string}} msg  mensaje de parseWebhook
- * @param {{intent?:object|null}} [opts]  intención ya interpretada (por ejemplo, por la IA y
- *   validada antes). Si no llega, se interpreta con las reglas de interpret.js.
+ * @param {{intent?:object|null}} [opts]  intención ya interpretada (por ejemplo, por la IA).
+ *   Se valida con validateIntent; si no cumple el contrato, cuenta como "no entendí".
+ *   Si no llega, se interpreta con las reglas de interpret.js.
  * @returns {{state:string, data:object, replies:object[], order?:object, handoff?:{reason:string}}}
  */
 export function step(restaurant, session, msg, { intent } = {}) {
@@ -266,7 +268,8 @@ export function step(restaurant, session, msg, { intent } = {}) {
   if (state === S.HUMANO) return { state, data: structuredClone(session.data || {}), replies: [] };
 
   const data = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
-  const it = intent !== undefined ? intent : interpret(restaurant, state, msg);
+  // Una intención que llega de fuera no se aplica a ciegas: pasa por el contrato (BUG-013).
+  const it = intent !== undefined ? validateIntent(restaurant, intent) : interpret(restaurant, state, msg);
 
   // Intenciones globales, válidas en cualquier estado.
   if (it?.type === 'human') return handoff(restaurant, data, it.via);
