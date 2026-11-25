@@ -342,3 +342,113 @@ describe('ramas del flujo', () => {
     assert.deepEqual(ids(resumen), ['confirm', 'cart:edit', 'cancel']);
   });
 });
+
+describe('líneas con extras y notas (EVA-002)', () => {
+  const add = items => ({ intent: { type: 'add_items', items } });
+
+  test('add_items arma el carrito con extras y notas; pricing suma los extras', () => {
+    const res = step(r, ses(S.MENU), txt('x'), add([
+      { itemId: 'perro', qty: 1, extras: ['tocineta'], note: 'sin salsa de piña' },
+      { itemId: 'gaseosa', qty: 2 }
+    ]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [
+      { itemId: 'perro', qty: 1, extras: ['tocineta'], note: 'sin salsa de piña' },
+      { itemId: 'gaseosa', qty: 2 }
+    ]);
+    const b = bodies(res);
+    assert.match(b, /1 × Perro sencillo \+ Tocineta \(sin salsa de piña\): \$\s?12\.000/);
+    assert.match(b, /Total: \$\s?20\.000/);
+  });
+
+  test('las líneas idénticas se suman; con otra nota o extra quedan aparte', () => {
+    const uno = step(r, ses(S.MENU), txt('x'), add([{ itemId: 'perro', qty: 1, note: 'sin cebolla' }, { itemId: 'perro', qty: 1 }]));
+    assert.equal(uno.data.cart.length, 2);
+    const dos = step(r, uno, txt('x'), add([{ itemId: 'perro', qty: 2, note: 'Sin  cebolla' }]));
+    assert.deepEqual(dos.data.cart, [{ itemId: 'perro', qty: 3, note: 'sin cebolla' }, { itemId: 'perro', qty: 1 }]);
+  });
+
+  test('el tope de 50 es por producto sumando todas sus líneas, y no se recorta en silencio', () => {
+    const cart = [{ itemId: 'perro', qty: 30, note: 'sin cebolla' }, { itemId: 'perro', qty: 15 }];
+    const res = step(r, ses(S.CARRITO, { cart }), txt('x'), add([{ itemId: 'perro', qty: 6, extras: ['queso'] }]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, cart, 'el carrito no cambia');
+    assert.match(bodies(res), /hasta 50 unidades de Perro sencillo/);
+    // Por la vía de los botones (cantidad) rige el mismo tope.
+    const boton = step(r, ses(S.CANTIDAD, { pending: 'perro', cart }), btn('qty:6'));
+    assert.equal(boton.state, S.CANTIDAD);
+    assert.match(bodies(boton), /hasta 50/);
+  });
+
+  test('un pedido admite hasta 20 líneas distintas', () => {
+    const cart = Array.from({ length: 20 }, (_, i) => ({ itemId: 'perro', qty: 1, note: `nota ${i}` }));
+    const res = step(r, ses(S.CARRITO, { cart }), txt('x'), add([{ itemId: 'gaseosa', qty: 1 }]));
+    assert.equal(res.data.cart.length, 20);
+    assert.match(bodies(res), /hasta 20 productos distintos/);
+  });
+
+  test('el primer mensaje con pedido saluda y arma el carrito, en vez de perderlo', () => {
+    const res = step(r, null, { ...txt('buenas, me regala 2 salchipapas'), name: 'Ana' }, add([{ itemId: 'salchipapa', qty: 2 }]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'salchipapa', qty: 2 }]);
+    assert.match(res.replies[0].body, /¡Hola, Ana!.*Bienvenido/);
+    assert.match(bodies(res), /2 × Salchipapa/);
+  });
+
+  test('en el paso de la cantidad, un pedido completo reemplaza la pregunta', () => {
+    const res = step(r, ses(S.CANTIDAD, { pending: 'perro' }), txt('x'), add([{ itemId: 'especial', qty: 2 }]));
+    assert.equal(res.state, S.CARRITO);
+    assert.equal(res.data.pending, undefined);
+    assert.deepEqual(res.data.cart, [{ itemId: 'especial', qty: 2 }]);
+  });
+
+  test('add_items fuera de lugar (pago, confirmación) se trata como "no entendí"', () => {
+    for (const state of [S.PAGO, S.CONFIRMACION]) {
+      const res = step(r, conCarrito(state, { pickup: true, payment: 'Efectivo' }), txt('x'), add([{ itemId: 'perro', qty: 1 }]));
+      assert.equal(res.state, state);
+      assert.match(bodies(res), /No te entendí/);
+    }
+  });
+
+  test('remove_item quita unidades (lo último primero), todas, o avisa si no está', () => {
+    const cart = [{ itemId: 'perro', qty: 2, note: 'sin cebolla' }, { itemId: 'perro', qty: 1 }, { itemId: 'gaseosa', qty: 1 }];
+    const rm = (state, intent, c = cart) => step(r, ses(state, { cart: c }), txt('x'), { intent: { type: 'remove_item', ...intent } });
+
+    const dos = rm(S.CARRITO, { itemId: 'perro', qty: 2 });
+    assert.deepEqual(dos.data.cart, [{ itemId: 'perro', qty: 1, note: 'sin cebolla' }, { itemId: 'gaseosa', qty: 1 }]);
+    assert.match(bodies(dos), /quité 2 × Perro sencillo/);
+
+    const todos = rm(S.CARRITO, { itemId: 'perro' });
+    assert.deepEqual(todos.data.cart, [{ itemId: 'gaseosa', qty: 1 }]);
+    assert.match(bodies(todos), /quité 3 × Perro sencillo/);
+
+    const demas = rm(S.CARRITO, { itemId: 'gaseosa', qty: 9 });
+    assert.match(bodies(demas), /quité 1 × Gaseosa/);
+    assert.equal(demas.state, S.CARRITO);
+
+    const vacio = rm(S.CARRITO, { itemId: 'gaseosa' }, [{ itemId: 'gaseosa', qty: 1 }]);
+    assert.equal(vacio.state, S.MENU, 'sin productos vuelve al menú');
+
+    const noEsta = rm(S.CARRITO, { itemId: 'salchipapa' });
+    assert.deepEqual(noEsta.data.cart, cart);
+    assert.match(bodies(noEsta), /No tienes Salchipapa en el pedido/);
+  });
+
+  test('el carrito guardado descarta líneas con extras que el producto ya no admite', () => {
+    const res = step(r, ses(S.CARRITO, { cart: [
+      { itemId: 'gaseosa', qty: 1, extras: ['queso'] },
+      { itemId: 'perro', qty: 1, extras: ['queso'], note: 'sin‮ piña' }
+    ] }), btn('cart:checkout'));
+    assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 1, extras: ['queso'], note: 'sin piña' }]);
+  });
+});
+
+test('splitText parte entre líneas y respeta el límite', async () => {
+  const { splitText } = await import('../src/conversation/flow.js');
+  const body = Array.from({ length: 30 }, (_, i) => `línea ${i} ${'x'.repeat(190)}`).join('\n');
+  const partes = splitText(body, 1000);
+  assert.ok(partes.length > 1);
+  assert.ok(partes.every(p => p.length <= 1000));
+  assert.equal(partes.join('\n'), body, 'no se pierde ni se parte ninguna línea');
+  assert.deepEqual(splitText('x'.repeat(25), 10), ['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)]);
+});

@@ -9,24 +9,44 @@
 import { priceOrder, describeOrder, formatCOP } from '../pricing.js';
 import { STATES, MAX_QTY } from './states.js';
 import { interpret, normalize } from './interpret.js';
-import { validateIntent } from './intents.js';
+import { validateIntent, cleanLine } from './intents.js';
 
 // Se reexportan para quien ya los importaba desde aquí.
 export { STATES, MAX_QTY, normalize };
 const S = STATES;
 
 export const MENU_PAGE_SIZE = 8; // 10 filas por lista: 8 productos + "ver más" + "ver carrito"
+export const MAX_CART_LINES = 20; // líneas distintas por pedido (producto + extras + nota)
 const MISSES_BEFORE_OFFER = 2;
 const BODY_MAX = 1024;
+const TEXT_MAX = 4096; // límite de un mensaje de texto de la Cloud API
 const HUMAN_BUTTON = { id: 'human', title: 'Hablar con persona' };
 
 const clip = (s, n) => (s.length <= n ? s : s.slice(0, n - 1) + '…');
 const text = body => ({ kind: 'text', body });
 
-// Si el cuerpo supera el límite de un mensaje interactivo, se manda aparte como texto.
+// Parte un texto largo en mensajes de hasta TEXT_MAX caracteres, cortando entre líneas para no
+// partir un producto por la mitad. Una línea sola nunca llega al límite (nombre, extras y nota
+// tienen tope), pero si llegara se corta igual.
+export function splitText(body, max = TEXT_MAX) {
+  const chunks = [];
+  let current = '';
+  for (const line of body.split('\n')) {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length <= max) { current = candidate; continue; }
+    if (current) chunks.push(current);
+    current = line;
+    while (current.length > max) { chunks.push(current.slice(0, max)); current = current.slice(max); }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+// Si el cuerpo supera el límite de un mensaje interactivo, se manda aparte como texto (en
+// varios mensajes si pasa del límite de un texto) y los botones van con un cuerpo corto.
 function withButtons(body, buttons, shortBody = '¿Qué hacemos?') {
   if (body.length <= BODY_MAX) return [{ kind: 'buttons', body, buttons }];
-  return [text(body), { kind: 'buttons', body: shortBody, buttons }];
+  return [...splitText(body).map(text), { kind: 'buttons', body: shortBody, buttons }];
 }
 
 const priceCart = (restaurant, data, withZone = false) =>
@@ -36,9 +56,11 @@ const priceCart = (restaurant, data, withZone = false) =>
 
 // El saludo va en un mensaje con botones (cuerpo de máximo 1024 caracteres): el nombre del
 // restaurante y el horario vienen de la configuración y se recortan para que siempre quepa.
+const welcome = (restaurant, name) =>
+  `${name ? `¡Hola, ${clip(name, 30)}! 👋` : '¡Hola! 👋'} Bienvenido a ${clip(restaurant.name, 100)}.`;
+
 function greeting(restaurant, name) {
-  const hi = name ? `¡Hola, ${clip(name, 30)}! 👋` : '¡Hola! 👋';
-  const body = `${hi} Bienvenido a ${clip(restaurant.name, 100)}.` +
+  const body = welcome(restaurant, name) +
     (restaurant.hours ? `\nHorario: ${clip(restaurant.hours.replace(/\.$/, ''), 600)}.` : '') +
     '\n\n¿Qué quieres hacer?';
   return [{ kind: 'buttons', body, buttons: [{ id: 'menu', title: 'Hacer pedido' }, HUMAN_BUTTON] }];
@@ -143,14 +165,15 @@ function go(restaurant, state, data, before = []) {
 
 // La configuración puede cambiar entre mensajes: se descarta lo que ya no existe.
 // También lo que no tiene forma válida (datos corruptos), para no fallar en cada mensaje.
-// Una cantidad fuera de 1..MAX_QTY se descarta en vez de acotarse: acotarla cambiaría
-// en silencio lo que el cliente pidió y lo que se le cobra.
+// Una línea inválida (cantidad fuera de 1..MAX_QTY, un extra que el producto ya no admite)
+// se descarta en vez de corregirse: corregirla cambiaría en silencio lo que el cliente pidió y
+// lo que se le cobra. La regla es la misma del contrato (cleanLine).
 function sanitize(restaurant, data) {
   const menu = new Set(restaurant.menu.map(m => m.id));
   const zones = new Set((restaurant.deliveryZones || []).map(z => z.id));
   const base = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   const cart = Array.isArray(base.cart) ? base.cart : [];
-  const out = { ...base, cart: cart.filter(l => menu.has(l?.itemId) && Number.isInteger(l.qty) && l.qty >= 1 && l.qty <= MAX_QTY) };
+  const out = { ...base, cart: cart.map(l => cleanLine(restaurant, l, { maxQty: MAX_QTY })).filter(Boolean) };
   if (out.pending && !menu.has(out.pending)) delete out.pending;
   if (out.zoneId && !zones.has(out.zoneId)) { out.zoneId = null; out.address = null; }
   if (out.payment && !restaurant.payments.includes(out.payment)) delete out.payment;
@@ -166,13 +189,63 @@ function handoff(restaurant, data, reason) {
   };
 }
 
-function addToCart(data, itemId, qty) {
-  const cart = (data.cart || []).map(l => ({ ...l }));
-  const line = cart.find(l => l.itemId === itemId);
-  const total = (line?.qty || 0) + qty;
-  if (total > MAX_QTY) return null;
-  if (line) line.qty = total; else cart.push({ itemId, qty });
-  return cart;
+const itemName = (restaurant, id) => restaurant.menu.find(m => m.id === id)?.name ?? id;
+
+// Una línea del carrito se identifica por producto + extras + nota: dos perros "sin cebolla"
+// son una línea de 2, pero un perro "sin cebolla" y otro sin nota son dos líneas.
+const lineKey = l => [l.itemId, (l.extras || []).join(','), normalize(l.note || '')].join('|');
+
+/**
+ * Agrega líneas ya validadas al carrito. El tope de MAX_QTY es por producto, sumando todas sus
+ * líneas, y el pedido admite MAX_CART_LINES líneas. Si algo se pasa, se rechaza todo el lote
+ * con un mensaje: nunca se recorta en silencio.
+ * @returns {{cart:object[]}|{error:string}}
+ */
+function addLines(restaurant, cart, items) {
+  const next = (cart || []).map(l => ({ ...l }));
+  for (const it of items) {
+    const same = next.find(l => lineKey(l) === lineKey(it));
+    if (same) same.qty += it.qty; else next.push({ ...it });
+  }
+  for (const id of new Set(items.map(i => i.itemId))) {
+    const total = next.filter(l => l.itemId === id).reduce((n, l) => n + l.qty, 0);
+    if (total > MAX_QTY) return { error: `Se pueden pedir hasta ${MAX_QTY} unidades de ${itemName(restaurant, id)} por pedido.` };
+  }
+  if (next.length > MAX_CART_LINES) return { error: `Un pedido admite hasta ${MAX_CART_LINES} productos distintos.` };
+  return { cart: next };
+}
+
+// Quita unidades de un producto empezando por lo último que se agregó; sin qty, todas.
+function removeFromCart(cart, itemId, qty = Infinity) {
+  let left = qty;
+  const next = [];
+  for (const l of [...cart].reverse()) {
+    if (l.itemId !== itemId || left <= 0) { next.unshift(l); continue; }
+    const take = Math.min(l.qty, left);
+    left -= take;
+    if (l.qty > take) next.unshift({ ...l, qty: l.qty - take });
+  }
+  const units = c => c.filter(l => l.itemId === itemId).reduce((n, l) => n + l.qty, 0);
+  return { cart: next, removed: units(cart) - units(next) };
+}
+
+// add_items desde un paso donde se está armando el pedido: el carrito resultante se muestra
+// para que el cliente lo revise. Si se pasa de un tope, se queda en el mismo paso con el aviso.
+function applyAddItems(r, state, data, items) {
+  const res = addLines(r, data.cart, items);
+  if (res.error) return go(r, state, data, [text(res.error)]);
+  const { pending, ...rest } = data;
+  return go(r, S.CARRITO, { ...rest, cart: res.cart });
+}
+
+function applyRemoveItem(r, state, data, intent) {
+  const name = itemName(r, intent.itemId);
+  if (!(data.cart || []).some(l => l.itemId === intent.itemId)) {
+    return go(r, state, data, [text(`No tienes ${name} en el pedido.`)]);
+  }
+  const { cart, removed } = removeFromCart(data.cart, intent.itemId, intent.qty);
+  // Si el carrito queda vacío, guard() lo lleva al menú.
+  return go(r, S.CARRITO, { ...data, cart }, [text(`Listo, quité ${removed} × ${name}.`)]);
 }
 
 // Cada estado acepta solo las intenciones que le corresponden; cualquier otra (un botón viejo
@@ -180,6 +253,7 @@ function addToCart(data, itemId, qty) {
 const handlers = {
   [S.SALUDO](r, data, intent) {
     if (intent.type === 'start_order') return go(r, S.MENU, { ...data, menuPage: 1 });
+    if (intent.type === 'add_items') return applyAddItems(r, S.SALUDO, data, intent.items);
     return null;
   },
 
@@ -189,21 +263,24 @@ const handlers = {
     if (intent.type === 'select_item' && r.menu.some(m => m.id === intent.itemId)) {
       return go(r, S.CANTIDAD, { ...data, pending: intent.itemId });
     }
+    if (intent.type === 'add_items') return applyAddItems(r, S.MENU, data, intent.items);
+    if (intent.type === 'remove_item') return applyRemoveItem(r, S.MENU, data, intent);
     return null;
   },
 
   [S.CANTIDAD](r, data, intent) {
+    // "dos perros y una gaseosa" en vez de la cantidad: vale como pedido completo.
+    if (intent.type === 'add_items') return applyAddItems(r, S.CANTIDAD, data, intent.items);
     if (intent.type !== 'quantity' || !Number.isInteger(intent.qty) || intent.qty < 1) return null;
-    const cart = addToCart(data, data.pending, intent.qty);
-    if (!cart) return go(r, S.CANTIDAD, data, [text(`Se pueden pedir hasta ${MAX_QTY} unidades por producto.`)]);
-    const { pending, ...rest } = data;
-    return go(r, S.CARRITO, { ...rest, cart });
+    return applyAddItems(r, S.CANTIDAD, data, [{ itemId: data.pending, qty: intent.qty }]);
   },
 
   [S.CARRITO](r, data, intent) {
     if (intent.type === 'add_more') return go(r, S.MENU, { ...data, menuPage: 1 });
     if (intent.type === 'checkout') return go(r, S.ZONA, data);
     if (intent.type === 'clear_cart') return go(r, S.MENU, { ...data, cart: [], menuPage: 1 }, [text('🗑️ Vacié tu carrito.')]);
+    if (intent.type === 'add_items') return applyAddItems(r, S.CARRITO, data, intent.items);
+    if (intent.type === 'remove_item') return applyRemoveItem(r, S.CARRITO, data, intent);
     return null;
   },
 
@@ -289,7 +366,14 @@ export function step(restaurant, session, msg, { intent } = {}) {
   }
   if (it?.type === 'menu') return go(restaurant, S.MENU, { ...data, menuPage: 1 });
 
-  if (state === S.INICIO) return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
+  if (state === S.INICIO) {
+    // "Buenas, me regala 2 salchipapas" como primer mensaje: se saluda y se arma el pedido.
+    if (it?.type === 'add_items') {
+      const res = addLines(restaurant, [], it.items);
+      if (!res.error) return go(restaurant, S.CARRITO, { cart: res.cart }, [text(welcome(restaurant, msg.name))]);
+    }
+    return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
+  }
 
   // Si la sesión quedó incoherente (p. ej. cambió el menú), se reubica antes de interpretar.
   if (guard(state, data) !== state) return go(restaurant, state, data);

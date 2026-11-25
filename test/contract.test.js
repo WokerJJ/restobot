@@ -16,7 +16,11 @@ const extremo = {
   ...ejemplo,
   name: largo('Restaurante con un nombre comercial muy largo', 150),
   hours: largo('Lunes a viernes de 11:00 a. m. a 3:00 p. m. y de 6:00 p. m. a 11:00 p. m.; festivos', 1000),
-  menu: Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, name: largo(`Producto ${i}`, 40), price: 99_000 + i })),
+  extras: [
+    { id: 'e1', name: largo('Extra de queso doble gratinado', 40), price: 9_000 },
+    { id: 'e2', name: largo('Extra de tocineta ahumada crocante', 40), price: 9_000 }
+  ],
+  menu: Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, name: largo(`Producto ${i}`, 40), price: 99_000 + i, extras: ['e1', 'e2'] })),
   deliveryZones: Array.from({ length: 9 }, (_, i) => ({ id: `z${i}`, name: largo(`Zona ${i} barrio`, 60), fee: 15_000 })),
   payments: Array.from({ length: 4 }, (_, i) => largo(`Medio de pago ${i}`, 30))
 };
@@ -41,7 +45,11 @@ const btn = replyId => ({ type: 'interactive', replyId });
 
 // Una sesión válida para cada estado, con el carrito lleno al máximo.
 function sesiones(r) {
-  const cart = r.menu.map(m => ({ itemId: m.id, qty: MAX_QTY }));
+  // Cada línea con todos sus extras y una nota de 140 caracteres: el resumen más largo posible.
+  const cart = r.menu.map(m => ({
+    itemId: m.id, qty: MAX_QTY,
+    ...(m.extras?.length ? { extras: m.extras, note: largo('sin cebolla y con la salsa aparte', 140) } : {})
+  }));
   const zone = r.deliveryZones.at(-1);
   const entrega = zone ? { pickup: false, zoneId: zone.id, address: largo('Calle 10 # 5-20', 200) } : { pickup: true };
   const payment = r.payments.at(-1);
@@ -96,6 +104,16 @@ test('todas las respuestas del flujo respetan los límites de la Cloud API', () 
           revisar(donde, res.replies);
           if (res.order) revisar(`${donde} (confirmado)`, confirmedReplies(r, 123_456, res.order));
         }
+      }
+      // Intenciones que solo llegan desde la IA: agregar y quitar productos.
+      const m = r.menu.at(-1);
+      for (const intent of [
+        { type: 'add_items', items: [{ itemId: m.id, qty: 1, extras: m.extras, note: largo('bien tostado por favor', 140) }] },
+        { type: 'remove_item', itemId: m.id, qty: 1 },
+        { type: 'remove_item', itemId: r.menu[0].id }
+      ]) {
+        const res = step(r, sesion, { ...txt('x') }, { intent });
+        revisar(`${nombre} · ${state} ← ${intent.type}`, res.replies);
       }
     }
   }
