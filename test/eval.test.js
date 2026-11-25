@@ -159,3 +159,18 @@ test('las líneas rechazadas se comparan solo por el multiconjunto de motivos (E
   assert.ok(matches(intent(perro, []), intent(perro)));
   assert.deepEqual(checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado: intent([], [{ reason: 'producto' }]) }), []);
 });
+
+test('el costo se informa medido y en el peor caso, sin caché (EVA-029)', async () => {
+  const { estimateCost } = await import('../eval/cost.js');
+  const price = { input: 4, output: 20, cacheRead: 0.2 };
+  const usage = { input: 1_000_000, cacheWrite: 1_000_000, cacheRead: 2_000_000, output: 100_000, calls: 10 };
+  const c = estimateCost(usage, price);
+  // medido: 4 + 1,25 × 4 + 2 × 0,2 + 0,1 × 20 = 11,4
+  assert.ok(Math.abs(c.costUsd - 11.4) < 1e-9);
+  assert.ok(Math.abs(c.costPerCallUsd - 1.14) < 1e-9);
+  // peor caso: (1 + 1 + 2) millones × 4 × 1,25 + 0,1 × 20 = 22
+  assert.ok(Math.abs(c.worstCaseUsd - 22) < 1e-9);
+  assert.ok(Math.abs(c.worstCasePerCallUsd - 2.2) < 1e-9);
+  assert.deepEqual(estimateCost(usage, undefined),
+    { costUsd: null, costPerCallUsd: null, worstCaseUsd: null, worstCasePerCallUsd: null }, 'sin precio conocido');
+});

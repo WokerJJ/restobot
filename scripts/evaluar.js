@@ -12,6 +12,7 @@ import { loadEnv, loadRestaurant } from '../src/config.js';
 import { interpret } from '../src/conversation/interpret.js';
 import { createClaudeInterpreter } from '../src/ai/claude.js';
 import { loadCases, evaluate } from '../eval/grade.js';
+import { estimateCost } from '../eval/cost.js';
 
 // Precios en dólares por millón de tokens, para estimar el costo del informe. Revísalos en la
 // página de precios de Anthropic antes de decidir con ellos. Escritura en caché: 1,25 × entrada.
@@ -66,9 +67,7 @@ const report = await evaluate(restaurant, loadCases(), interpreter, options);
 
 function costReport() {
   if (!usage.calls) return null;
-  const p = PRICES[model];
-  const cost = p && (usage.input * p.input + usage.cacheWrite * p.input * 1.25 + usage.cacheRead * p.cacheRead + usage.output * p.output) / 1e6;
-  return { model, ...usage, avgMs: Math.round(usage.ms / usage.calls), costUsd: cost ?? null, costPerCallUsd: cost ? cost / usage.calls : null };
+  return { model, ...usage, avgMs: Math.round(usage.ms / usage.calls), ...estimateCost(usage, PRICES[model]) };
 }
 
 if (args.includes('--json')) {
@@ -85,7 +84,10 @@ if (args.includes('--json')) {
   if (c) {
     const usd = n => (n === null ? 'sin precio conocido' : `US$${n.toFixed(4)}`);
     console.log(`Latencia media: ${c.avgMs} ms · tokens: ${c.input} entrada, ${c.cacheRead} desde caché, ${c.cacheWrite} a caché, ${c.output} salida`);
-    console.log(`Costo estimado: ${usd(c.costUsd)} en total, ${usd(c.costPerCallUsd)} por mensaje`);
+    console.log(`Costo medido: ${usd(c.costUsd)} en total, ${usd(c.costPerCallUsd)} por mensaje`);
+    console.log(`Costo en el peor caso (sin caché): ${usd(c.worstCaseUsd)} en total, ${usd(c.worstCasePerCallUsd)} por mensaje`);
+    console.log('  Supuesto: los casos corren seguidos y casi todo sale de la caché; en un local con poco tráfico la');
+    console.log('  caché vence entre mensajes, y el peor caso cobra todo el prompt como escritura en caché (1,25 × entrada).');
   }
   console.log('');
   for (const [cat, s] of Object.entries(report.byCategory)) {
