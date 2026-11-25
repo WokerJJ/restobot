@@ -48,6 +48,9 @@ export function loadRestaurant(path) {
   return r;
 }
 
+// Un tope razonable para el tiempo de un pedido (10 horas): más que eso es un error de configuración.
+const MAX_ETA_MINUTES = 600;
+
 export function validateRestaurant(r) {
   const ids = new Set();
   if (!r.name) throw new Error('restaurant.name es obligatorio');
@@ -77,6 +80,13 @@ export function validateRestaurant(r) {
     zoneIds.add(z.id);
     if (!z.name) throw new Error(`la zona ${z.id} necesita nombre`);
     if (!Number.isInteger(z.fee) || z.fee < 0) throw new Error(`costo de domicilio inválido (use pesos enteros): ${z.id}`);
+  }
+  // Tiempo de preparación o entrega: [mínimo, máximo] en minutos enteros, o nada (BUG-027).
+  if (r.etaMinutes !== undefined) {
+    const eta = r.etaMinutes;
+    const ok = Array.isArray(eta) && eta.length === 2 && eta.every(Number.isInteger) &&
+      eta[0] > 0 && eta[0] <= eta[1] && eta[1] <= MAX_ETA_MINUTES;
+    if (!ok) throw new Error(`restaurant.etaMinutes debe ser [mínimo, máximo] en minutos enteros, con 0 < mínimo <= máximo <= ${MAX_ETA_MINUTES}`);
   }
   // La conversación guiada ofrece el pago con botones: tiene que haber al menos una opción.
   if (!Array.isArray(r.payments) || !r.payments.length || !r.payments.every(p => typeof p === 'string' && p.trim())) {
