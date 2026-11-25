@@ -251,10 +251,34 @@ describe('robustez', () => {
     assert.equal(step(r, conCarrito(S.CONFIRMACION, { payment: 'Efectivo' }), btn('confirm')).state, S.ZONA);
   });
 
-  test('descarta productos que ya no están en el menú', () => {
+  test('descarta productos que ya no están en el menú, avisa y no avanza el cobro (EVA-020)', () => {
     const res = step(r, ses(S.CARRITO, { cart: [{ itemId: 'borrado', qty: 1 }, { itemId: 'perro', qty: 1 }] }), btn('cart:checkout'));
     assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 1 }]);
-    assert.equal(res.state, S.ZONA);
+    assert.equal(res.state, S.CARRITO);
+    assert.equal(res.replies[0].body, 'Cambió la carta: quité 1 × borrado.');
+    assert.match(bodies(res), /Tu pedido:.*Total: \$\s?9\.000/s);
+  });
+
+  test('si la carta cambió en la confirmación, no se confirma: se avisa y se muestra el resumen nuevo (EVA-020)', () => {
+    const cart = [{ itemId: 'gaseosa', qty: 1, extras: ['queso'] }, { itemId: 'especial', qty: 2 }];
+    const res = step(r, ses(S.CONFIRMACION, { cart, pickup: true, payment: 'Efectivo' }), btn('confirm'));
+    assert.equal(res.order, undefined);
+    assert.equal(res.state, S.CONFIRMACION);
+    assert.equal(res.replies[0].body, 'Cambió la carta: quité 1 × Gaseosa 400 ml + Queso extra.');
+    assert.match(bodies(res), /Total: \$\s?26\.000/);
+    assert.ok(ids(res).includes('confirm'), 'se pide confirmar de nuevo');
+    // Si no queda nada, guard lo lleva al menú; tampoco hay pedido.
+    const vacio = step(r, ses(S.CONFIRMACION, { cart: [{ itemId: 'borrado', qty: 1 }], pickup: true, payment: 'Efectivo' }), btn('confirm'));
+    assert.equal(vacio.order, undefined);
+    assert.equal(vacio.state, S.MENU);
+  });
+
+  test('fuera del cobro, la línea quitada se avisa y el flujo sigue normal (EVA-020)', () => {
+    const res = step(r, ses(S.MENU, { cart: [{ itemId: 'perro', qty: 1, extras: ['pina'] }] }), btn('item:perro'));
+    assert.equal(res.state, S.CANTIDAD);
+    assert.deepEqual(res.data.cart, []);
+    assert.equal(res.replies[0].body, 'Cambió la carta: quité 1 × Perro sencillo + pina.');
+    assert.equal(res.replies.length, 2);
   });
 
   test('un estado desconocido en la base vuelve a empezar', () => {

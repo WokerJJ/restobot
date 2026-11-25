@@ -146,10 +146,11 @@ export function confirmedReplies(restaurant, orderId, order) {
 
 // ---------------------------------------------------------------- transiciones
 
+const CHECKOUT = [S.CARRITO, S.ZONA, S.DIRECCION, S.PAGO, S.CONFIRMACION];
+
 // Invariantes: ningún paso del cobro se alcanza con datos incompletos.
 function guard(state, data) {
-  const checkout = [S.CARRITO, S.ZONA, S.DIRECCION, S.PAGO, S.CONFIRMACION];
-  if (checkout.includes(state) && !(data.cart || []).length) return S.MENU;
+  if (CHECKOUT.includes(state) && !(data.cart || []).length) return S.MENU;
   if (state === S.CANTIDAD && !data.pending) return S.MENU;
   if (state === S.DIRECCION && !data.zoneId) return S.ZONA;
   if ([S.PAGO, S.CONFIRMACION].includes(state) && !data.pickup && !(data.zoneId && data.address)) return S.ZONA;
@@ -168,16 +169,36 @@ function go(restaurant, state, data, before = []) {
 // Una línea inválida (cantidad fuera de 1..MAX_QTY, un extra que el producto ya no admite)
 // se descarta en vez de corregirse: corregirla cambiaría en silencio lo que el cliente pidió y
 // lo que se le cobra. La regla es la misma del contrato (cleanLine).
+// Devuelve también las líneas quitadas que el cliente pudo ver (forma válida: producto y
+// cantidad 1..MAX_QTY) para avisarle; los datos corruptos nunca se mostraron y se descartan sin aviso.
 function sanitize(restaurant, data) {
   const menu = new Set(restaurant.menu.map(m => m.id));
   const zones = new Set((restaurant.deliveryZones || []).map(z => z.id));
   const base = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   const cart = Array.isArray(base.cart) ? base.cart : [];
-  const out = { ...base, cart: mergeLines(cart.map(l => cleanLine(restaurant, l, { maxQty: MAX_QTY })).filter(Boolean)) };
+  const kept = [];
+  const dropped = [];
+  for (const l of cart) {
+    const line = cleanLine(restaurant, l, { maxQty: MAX_QTY });
+    if (line) kept.push(line);
+    else if (typeof l?.itemId === 'string' && Number.isInteger(l.qty) && l.qty >= 1 && l.qty <= MAX_QTY) dropped.push(l);
+  }
+  const out = { ...base, cart: mergeLines(kept) };
   if (out.pending && !menu.has(out.pending)) delete out.pending;
   if (out.zoneId && !zones.has(out.zoneId)) { out.zoneId = null; out.address = null; }
   if (out.payment && !restaurant.payments.includes(out.payment)) delete out.payment;
-  return out;
+  return { data: out, dropped };
+}
+
+// "Cambió la carta: quité 1 × Perro sencillo + Queso extra." Con el id si el producto (o el
+// extra) ya no existe en la configuración.
+function droppedNotice(restaurant, dropped) {
+  const extraName = id => (restaurant.extras || []).find(e => e.id === id)?.name ?? String(id);
+  const lines = dropped.map(l => {
+    const extras = Array.isArray(l.extras) && l.extras.length ? ' + ' + l.extras.map(extraName).join(', ') : '';
+    return `${l.qty} × ${clip(itemName(restaurant, l.itemId), 60)}${clip(extras, 120)}`;
+  });
+  return splitText(`Cambió la carta: quité ${lines.join(', ')}.`).map(text);
 }
 
 function handoff(restaurant, data, reason) {
@@ -364,7 +385,7 @@ export function step(restaurant, session, msg, { intent } = {}) {
   // Mientras una persona atiende, el bot no responde nada.
   if (state === S.HUMANO) return { state, data: structuredClone(session.data || {}), replies: [] };
 
-  const data = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
+  const { data, dropped } = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
   // Una intención que llega de fuera no se aplica a ciegas: pasa por el contrato (BUG-013).
   // Solo la IA le pasa intenciones a step (las reglas corren aquí dentro), así que se valida
   // como salida de la IA: sin media ni menu_page, y una derivación queda con motivo 'ia'.
@@ -397,7 +418,15 @@ export function step(restaurant, session, msg, { intent } = {}) {
     return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
   }
 
+  // Si la carta cambió y se quitaron líneas que el cliente vio (EVA-020), se le avisa. En el cobro
+  // no se aplica la intención: se muestra de nuevo el paso actual con el carrito nuevo, para que
+  // nunca se confirme (ni se avance) sobre un resumen distinto del que vio. Fuera del cobro
+  // todavía no ha revisado nada, así que basta con anteponer el aviso y seguir normal.
+  const notice = dropped.length ? droppedNotice(restaurant, dropped) : [];
+  if (notice.length && CHECKOUT.includes(state)) return go(restaurant, state, data, notice);
+
   // Si la sesión quedó incoherente (p. ej. cambió el menú), se reubica antes de interpretar.
-  if (guard(state, data) !== state) return go(restaurant, state, data);
-  return (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data);
+  if (guard(state, data) !== state) return go(restaurant, state, data, notice);
+  const res = (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data);
+  return notice.length ? { ...res, replies: [...notice, ...res.replies] } : res;
 }
