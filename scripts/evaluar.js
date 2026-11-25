@@ -30,7 +30,9 @@ if (args.includes('--json')) {
 } else {
   const pct = n => `${(n * 100).toFixed(0)}%`;
   console.log(`Intérprete: ${name}`);
-  console.log(`Acierto: ${report.ok}/${report.total} (${pct(report.accuracy)})\n`);
+  console.log(`Acierto: ${report.ok}/${report.total} (${pct(report.accuracy)})`);
+  if (report.errors > 0) console.log(`Errores del intérprete: ${report.errors} (cuentan como fallo)`);
+  console.log('');
   for (const [cat, s] of Object.entries(report.byCategory)) {
     console.log(`  ${cat.padEnd(14)} ${String(s.ok).padStart(2)}/${String(s.total).padEnd(2)} ${pct(s.ok / s.total)}`);
   }

@@ -3,7 +3,8 @@
 // Un intérprete es cualquier función (restaurante, estado, mensaje, contexto) → intención | null,
 // síncrona o asíncrona: las reglas de hoy o un modelo de IA mañana. Su salida pasa por
 // validateIntent antes de compararse, igual que en producción: una intención inválida cuenta
-// como "no entendí".
+// como "no entendí". Un error del intérprete siempre es un fallo, aunque el caso esperara null:
+// un modelo caído no "entendió bien" que no había nada que entender.
 
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -96,10 +97,11 @@ export async function evaluate(restaurant, cases, interpreter) {
       raw = await interpreter(restaurant, c.estado, msg, { data: c.datos || {} });
     } catch (err) {
       raw = null;
-      error = err.message;
+      // Siempre un texto no vacío, aunque se lance algo que no es un Error o un Error sin mensaje.
+      error = String(err?.message || err || 'error sin mensaje');
     }
     const actual = raw === null || raw === undefined ? null : validateIntent(restaurant, raw);
-    const ok = [c.esperado, ...(c.aceptables || [])].some(e => matches(actual, e));
+    const ok = !error && [c.esperado, ...(c.aceptables || [])].some(e => matches(actual, e));
     results.push({ id: c.id, categoria: c.categoria, estado: c.estado, texto: c.texto, esperado: c.esperado, obtenido: actual, ok, error });
   }
 
@@ -110,5 +112,6 @@ export async function evaluate(restaurant, cases, interpreter) {
     if (r.ok) byCategory[r.categoria].ok++;
   }
   const ok = results.filter(r => r.ok).length;
-  return { total: results.length, ok, accuracy: results.length ? ok / results.length : 0, byCategory, results };
+  const errors = results.filter(r => r.error).length;
+  return { total: results.length, ok, errors, accuracy: results.length ? ok / results.length : 0, byCategory, results };
 }

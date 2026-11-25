@@ -39,6 +39,7 @@ test('evaluate valida la salida del intérprete y cuenta errores como no entendi
   });
   assert.equal(report.total, 3);
   assert.equal(report.ok, 2);
+  assert.equal(report.errors, 1);
   const caido = report.results.find(x => x.id === 'pago-02');
   assert.equal(caido.ok, false);
   assert.equal(caido.error, 'modelo caído');
@@ -58,4 +59,17 @@ test('las direcciones se comparan en orden y las notas no aceptan otro sentido (
   assert.ok(!matches(nota('sin piña bien fría'), nota('sin piña')), 'palabras de más');
   assert.ok(!matches(nota('bien fría'), nota('sin piña')));
   assert.ok(!matches(nota('bien fría'), { type: 'add_items', items: [{ itemId: 'perro', qty: 1 }] }), 'nota inventada');
+});
+
+test('un intérprete que lanza no acierta, ni siquiera donde se esperaba null (BUG-017)', async () => {
+  assert.ok(cases.some(c => c.esperado === null), 'el conjunto tiene casos que esperan null');
+  const report = await evaluate(r, cases, () => { throw new Error('modelo caído'); });
+  assert.equal(report.ok, 0);
+  assert.equal(report.errors, report.total);
+  assert.ok(Object.values(report.byCategory).every(c => c.ok === 0));
+  for (const thrown of [new Error(), undefined, '']) {
+    const raro = await evaluate(r, cases, () => { throw thrown; });
+    assert.equal(raro.ok, 0, `lanza ${JSON.stringify(thrown)}`);
+    assert.equal(raro.errors, raro.total);
+  }
 });
