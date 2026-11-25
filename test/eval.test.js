@@ -101,3 +101,13 @@ test('el conjunto no está sesgado hacia entender: hay casos donde lo correcto e
     }
   }
 });
+
+test('con source "ia" la salida pasa por el contrato de la IA y human se compara por tipo', async () => {
+  const persona = cases.filter(c => c.id === 'persona-01');
+  const deriva = await evaluate(r, persona, () => ({ type: 'human', via: 'boton' }), { source: 'ia' });
+  assert.equal(deriva.ok, 1);
+  assert.deepEqual(deriva.results[0].obtenido, { type: 'human', via: 'ia' });
+  const audio = await evaluate(r, persona, () => ({ type: 'media', kind: 'audio' }), { source: 'ia' });
+  assert.equal(audio.ok, 0);
+  assert.equal(audio.results[0].obtenido, null, 'la IA no puede producir media');
+});

@@ -5,6 +5,7 @@
 // validateIntent antes de compararse, igual que en producción: una intención inválida cuenta
 // como "no entendí". Un error del intérprete siempre es un fallo, aunque el caso esperara null:
 // un modelo caído no "entendió bien" que no había nada que entender.
+// Con { source: 'ia' } se valida con el contrato de la IA, igual que lo hará bot.js.
 
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -66,6 +67,10 @@ export function matches(actual, expected) {
   if (expected === null) return actual === null;
   if (actual === null || actual.type !== expected.type) return false;
   switch (expected.type) {
+    // El motivo (via) lo fija el bot según de dónde vino el mensaje (botón, reglas o IA), no lo
+    // decide el intérprete: un 'human' acierta por el tipo, sea cual sea su via.
+    case 'human':
+      return true;
     case 'add_items':
       return sameItems(actual.items, expected.items);
     case 'address':
@@ -95,8 +100,9 @@ export function checkCase(restaurant, c) {
  * @param {object} restaurant
  * @param {Array} cases
  * @param {(restaurant, state, msg, context) => object|null|Promise<object|null>} interpreter
+ * @param {{source?:'ia'}} [opts]  se pasa a validateIntent: 'ia' para los intérpretes de IA
  */
-export async function evaluate(restaurant, cases, interpreter) {
+export async function evaluate(restaurant, cases, interpreter, { source } = {}) {
   const results = [];
   for (const c of cases) {
     const msg = { type: 'text', text: c.texto };
@@ -109,7 +115,7 @@ export async function evaluate(restaurant, cases, interpreter) {
       // Siempre un texto no vacío, aunque se lance algo que no es un Error o un Error sin mensaje.
       error = String(err?.message || err || 'error sin mensaje');
     }
-    const actual = raw === null || raw === undefined ? null : validateIntent(restaurant, raw);
+    const actual = raw === null || raw === undefined ? null : validateIntent(restaurant, raw, { source });
     const allowed = [c.esperado, ...(c.aceptables || [])];
     const ok = !error && allowed.some(e => matches(actual, e));
     const indebida = Boolean(actual) && IRREVERSIBLE.includes(actual.type) && !allowed.some(e => e?.type === actual.type);

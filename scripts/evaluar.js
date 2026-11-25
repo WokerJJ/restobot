@@ -9,6 +9,8 @@ import { loadRestaurant } from '../src/config.js';
 import { interpret } from '../src/conversation/interpret.js';
 import { loadCases, evaluate } from '../eval/grade.js';
 
+// Las reglas se evalúan sin source. Un intérprete de IA se evaluará con { source: 'ia' } en
+// evaluate(), para que su salida pase por el mismo contrato que en bot.js.
 const INTERPRETERS = {
   reglas: (restaurant, state, msg) => interpret(restaurant, state, msg)
 };
