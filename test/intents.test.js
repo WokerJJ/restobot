@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
-import { validateIntent, INTENT_TYPES } from '../src/conversation/intents.js';
+import { validateIntent, INTENT_TYPES, AI_INTENT_TYPES } from '../src/conversation/intents.js';
 import { interpret } from '../src/conversation/interpret.js';
 import { STATES as S } from '../src/conversation/states.js';
 
@@ -69,4 +69,21 @@ test('todo lo que producen las reglas cumple el contrato', () => {
       }
     }
   }
+});
+
+test('con source "ia" solo pasan las intenciones que la IA puede producir (EVA-013)', () => {
+  const ia = intent => validateIntent(r, intent, { source: 'ia' });
+  assert.equal(ia({ type: 'media', kind: 'audio' }), null, 'media solo sale de un audio');
+  assert.equal(ia({ type: 'menu_page', page: 2 }), null, 'menu_page solo sale de un botón');
+  assert.deepEqual(ia({ type: 'human', via: 'boton' }), { type: 'human', via: 'ia' }, 'la IA no falsea el motivo');
+  assert.deepEqual(ia({ type: 'human' }), { type: 'human', via: 'ia' });
+  assert.deepEqual(ia({ type: 'select_item', itemId: 'perro' }), { type: 'select_item', itemId: 'perro' });
+  assert.ok(!AI_INTENT_TYPES.includes('media') && !AI_INTENT_TYPES.includes('menu_page'));
+  assert.ok(AI_INTENT_TYPES.every(t => INTENT_TYPES.includes(t)));
+
+  // Sin source, nada cambia.
+  assert.deepEqual(v({ type: 'media', kind: 'audio' }), { type: 'media', kind: 'audio' });
+  assert.deepEqual(v({ type: 'menu_page', page: 2 }), { type: 'menu_page', page: 2 });
+  assert.deepEqual(v({ type: 'human', via: 'boton' }), { type: 'human', via: 'boton' });
+  assert.equal(v({ type: 'human', via: 'ia' }), null);
 });

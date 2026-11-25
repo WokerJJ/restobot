@@ -74,3 +74,12 @@ test('step valida la intención dada: una mal formada se trata como "no entendí
   assert.equal(human.state, S.MENU);
   assert.equal(human.handoff, undefined);
 });
+
+test('la IA puede derivar a una persona: step la deja con motivo "ia" aunque diga otro', () => {
+  const res = step(r, { state: S.MENU, data: { cart: [] } }, txt('me comunican con alguien de verdad?'),
+    { intent: { type: 'human', via: 'boton' } });
+  assert.equal(res.state, S.HUMANO);
+  assert.deepEqual(res.handoff, { reason: 'ia' });
+  assert.equal(step(r, { state: S.MENU, data: { cart: [] } }, txt('x'), { intent: { type: 'media', kind: 'audio' } }).state, S.MENU,
+    'la IA no puede producir media');
+});

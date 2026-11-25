@@ -5,7 +5,7 @@
 // La validación revisa la forma y la configuración del restaurante (productos, zonas, pagos),
 // y descarta campos extra. Nunca hay precios aquí: los calcula pricing.js.
 //
-//   { type: 'human', via: 'boton' | 'frase' }
+//   { type: 'human', via: 'boton' | 'frase' | 'ia' }    'ia' solo con { source: 'ia' }
 //   { type: 'cancel' } | { type: 'menu' } | { type: 'start_order' } | { type: 'view_cart' }
 //   { type: 'media', kind: 'audio' | 'unsupported' }
 //   { type: 'select_item', itemId }               itemId del menú
@@ -20,12 +20,18 @@
 // Reservadas para la IA; flow.js todavía no las aplica (las trata como "no entendí"):
 //   { type: 'add_items', items: [{ itemId, qty, extras?: [extraId], note? }] }   (EVA-002)
 //   { type: 'question', topic: 'horario' | 'zonas' | 'pagos' | 'tiempo' | 'otro' }
+//
+// Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio y
+// menu_page de un botón, nunca de texto. En human se ignora el via que traiga y queda
+// via: 'ia', para que el motivo de la derivación (log y aviso al local) no se pueda falsear.
 
 export const INTENT_TYPES = Object.freeze([
   'human', 'cancel', 'menu', 'media', 'start_order', 'select_item', 'menu_page', 'view_cart',
   'quantity', 'add_more', 'checkout', 'clear_cart', 'zone', 'pickup', 'address', 'payment',
   'confirm', 'edit', 'add_items', 'question'
 ]);
+// Lo que puede devolver un modelo de IA: todo menos media y menu_page.
+export const AI_INTENT_TYPES = Object.freeze(INTENT_TYPES.filter(t => t !== 'media' && t !== 'menu_page'));
 export const QUESTION_TOPICS = Object.freeze(['horario', 'zonas', 'pagos', 'tiempo', 'otro']);
 export const MAX_ITEMS_PER_INTENT = 20;
 // Una cantidad "entendida" puede pasar del tope por producto (MAX_QTY): es mejor responder
@@ -60,14 +66,17 @@ function validateItems(restaurant, items) {
 
 /**
  * Valida una intención contra el contrato y la configuración del restaurante.
+ * @param {{source?:'ia'}} [opts]  source 'ia': solo tipos de AI_INTENT_TYPES y human con via 'ia'
  * @returns {object|null}  la intención normalizada (sin campos extra) o null si no cumple
  */
-export function validateIntent(restaurant, intent) {
-  if (!isPlainObject(intent) || !INTENT_TYPES.includes(intent.type)) return null;
+export function validateIntent(restaurant, intent, { source } = {}) {
+  const fromAI = source === 'ia';
+  if (!isPlainObject(intent) || !(fromAI ? AI_INTENT_TYPES : INTENT_TYPES).includes(intent.type)) return null;
   const { type } = intent;
 
   switch (type) {
     case 'human':
+      if (fromAI) return { type, via: 'ia' };
       return ['boton', 'frase'].includes(intent.via) ? { type, via: intent.via } : null;
     case 'media':
       return ['audio', 'unsupported'].includes(intent.kind) ? { type, kind: intent.kind } : null;

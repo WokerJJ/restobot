@@ -255,9 +255,9 @@ function miss(restaurant, state, data) {
  * @param {object} restaurant  configuración validada
  * @param {{state:string, data:object}|null} session
  * @param {{type:string, text?:string, replyId?:string, name?:string}} msg  mensaje de parseWebhook
- * @param {{intent?:object|null}} [opts]  intención ya interpretada (por ejemplo, por la IA).
- *   Se valida con validateIntent; si no cumple el contrato, cuenta como "no entendí".
- *   Si no llega, se interpreta con las reglas de interpret.js.
+ * @param {{intent?:object|null}} [opts]  intención interpretada por la IA. Se valida con
+ *   validateIntent(..., {source: 'ia'}); si no cumple, cuenta como "no entendí". Si no llega,
+ *   se interpreta con las reglas de interpret.js (botones, audio y texto simple).
  * @returns {{state:string, data:object, replies:object[], order?:object, handoff?:{reason:string}}}
  */
 export function step(restaurant, session, msg, { intent } = {}) {
@@ -269,7 +269,12 @@ export function step(restaurant, session, msg, { intent } = {}) {
 
   const data = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
   // Una intención que llega de fuera no se aplica a ciegas: pasa por el contrato (BUG-013).
-  const it = intent !== undefined ? validateIntent(restaurant, intent) : interpret(restaurant, state, msg);
+  // Solo la IA le pasa intenciones a step (las reglas corren aquí dentro), así que se valida
+  // como salida de la IA: sin media ni menu_page, y una derivación queda con motivo 'ia'.
+  // Validar dos veces da lo mismo, así que bot.js puede validar antes sin conflicto.
+  const it = intent !== undefined
+    ? validateIntent(restaurant, intent, { source: 'ia' })
+    : interpret(restaurant, state, msg);
 
   // Intenciones globales, válidas en cualquier estado.
   if (it?.type === 'human') return handoff(restaurant, data, it.via);
