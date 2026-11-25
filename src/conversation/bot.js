@@ -2,7 +2,7 @@
 // flow.js decide; este módulo solo hace efectos (base de datos, red, logs).
 
 import { step, confirmedReplies, STATES } from './flow.js';
-import { interpret } from './interpret.js';
+import { interpret, isGreeting } from './interpret.js';
 import { formatCOP } from '../pricing.js';
 import { maskPhone } from '../privacy.js';
 
@@ -104,10 +104,13 @@ export function createBot({
     // En la dirección tampoco (BUG-022): ahí el texto es solo la dirección, y si las reglas no
     // la aceptan es por su largo, que la IA no arregla. Llamarla solo arriesga que una dirección
     // reescrita (o un cancel) reemplace lo que el cliente escribió, y manda la dirección a un tercero.
+    // Un saludo solo, en el inicio o en el saludo, tampoco (EVA-027): step responde el saludo
+    // igual, así que la IA solo agregaría costo y espera.
     let intent;
     if (interpretAI && msg.type === 'text') {
       const state = Object.values(STATES).includes(session?.state) ? session.state : STATES.INICIO;
-      if (state !== STATES.HUMANO && state !== STATES.DIRECCION && interpret(restaurant, state, msg) === null) {
+      const greeting = (state === STATES.INICIO || state === STATES.SALUDO) && isGreeting(msg.text);
+      if (state !== STATES.HUMANO && state !== STATES.DIRECCION && !greeting && interpret(restaurant, state, msg) === null) {
         try {
           intent = (await interpretAI(restaurant, state, msg, { data: session?.data || {} })) ?? null;
         } catch (err) {

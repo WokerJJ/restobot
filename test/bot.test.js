@@ -479,5 +479,19 @@ test('mientras atiende una persona, la IA no se llama', async () => {
   await say('hola');
   await say('quiero hablar con un asesor');
   await say('¿siguen ahí?');
-  assert.equal(ai.calls.length, 1, 'solo el "hola" inicial, que las reglas no entienden');
+  assert.equal(ai.calls.length, 0, 'ni el saludo inicial (EVA-027) ni lo que llega con el chat derivado');
+});
+
+test('un saludo en el inicio o en el saludo no llama a la IA; un saludo con pedido sí (EVA-027)', async () => {
+  const ai = fakeAI({ 'hola, me das 2 perros': { type: 'add_items', items: [{ itemId: 'perro', qty: 2 }] } });
+  const { store, client, say } = setup({ interpretAI: ai });
+  await say('hola');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
+  assert.match(client.sent.at(-1).body, /Bienvenido/);
+  await say('Buenas tardes!');
+  await say('ola, buenas');
+  assert.equal(ai.calls.length, 0);
+  await say('hola, me das 2 perros');
+  assert.equal(ai.calls.length, 1);
+  assert.deepEqual(store.getSession(CLIENTE).data.cart, [{ itemId: 'perro', qty: 2 }]);
 });

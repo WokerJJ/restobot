@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
-import { interpret } from '../src/conversation/interpret.js';
+import { interpret, isGreeting } from '../src/conversation/interpret.js';
 import { step, STATES as S } from '../src/conversation/flow.js';
 
 const r = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
@@ -85,4 +85,13 @@ test('la IA no deriva por su cuenta aunque diga via "boton": ofrece el botón (B
   assert.equal(res.replies.at(-1).buttons[0].id, 'human');
   assert.equal(step(r, { state: S.MENU, data: { cart: [] } }, txt('x'), { intent: { type: 'media', kind: 'audio' } }).state, S.MENU,
     'la IA no puede producir media');
+});
+
+test('isGreeting: solo saludos y cortesía, sin nada más (EVA-027)', () => {
+  for (const t of ['hola', 'Buenas tardes!', 'ola, buenas', '¡Buenos días! ¿Cómo estás?', 'holaa', 'buenas noches, qué tal', 'Saludos 👋']) {
+    assert.equal(isGreeting(t), true, t);
+  }
+  for (const t of ['hola, me das 2 perros', 'buenas, tienen domicilio?', 'hola quiero hablar con alguien', '', '   ', 'dos']) {
+    assert.equal(isGreeting(t), false, t);
+  }
 });

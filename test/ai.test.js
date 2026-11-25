@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
 import { validateIntent } from '../src/conversation/intents.js';
-import { createClaudeInterpreter, buildSchema, buildSystemPrompt, buildUserContent, toIntent, API_URL, API_VERSION } from '../src/ai/claude.js';
+import { createClaudeInterpreter, buildSchema, buildSystemPrompt, buildUserContent, toIntent, API_URL, API_VERSION, DEFAULT_TIMEOUT_MS } from '../src/ai/claude.js';
 
 const r = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
 
@@ -116,4 +116,8 @@ test('un error de la API lanza sin exponer la clave', async () => {
   assert.match(err.message, /529: overloaded_error/);
   assert.doesNotMatch(err.message, /CLAVE/);
   assert.throws(() => createClaudeInterpreter({ apiKey: '' }), /ANTHROPIC_API_KEY/);
+});
+
+test('la espera por defecto es de 8 s: la cola del cliente no queda bloqueada 20 s (EVA-027)', () => {
+  assert.equal(DEFAULT_TIMEOUT_MS, 8000);
 });

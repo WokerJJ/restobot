@@ -41,6 +41,20 @@ export function normalize(s) {
     .trim();
 }
 
+// Saludos y cortesías: "hola", "buenas tardes", "ola, qué tal". Las frases se quitan antes que
+// las palabras sueltas, para no tomar "que" o "como" como saludo fuera de ellas.
+const GREETING_PHRASES = /\b(?:que tal|como (?:estas|esta|vas|va))\b/g;
+const GREETING_WORDS = /^(?:h?o+la+s?|holi+s?|buen(?:as|os)?|dias?|tardes?|noches?|saludos?|hey)$/;
+
+/**
+ * Verdadero si el mensaje es solo un saludo (sin nada más que entender). Así bot.js no le paga a
+ * la IA por un "hola" que flow.js contesta igual con el saludo (EVA-027).
+ */
+export function isGreeting(raw) {
+  const words = normalize(raw).replace(GREETING_PHRASES, ' ').split(' ').filter(Boolean);
+  return normalize(raw) !== '' && words.every(w => GREETING_WORDS.test(w));
+}
+
 function parseQty(t) {
   if (/^\d{1,3}$/.test(t)) return Number(t);
   return NUMBER_WORDS[t] ?? null;

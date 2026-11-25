@@ -15,6 +15,9 @@ export const API_URL = 'https://api.anthropic.com/v1/messages';
 export const API_VERSION = '2026-10-21';
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const UNKNOWN_ITEM = 'desconocido';
+// Mientras la IA responde, los mensajes siguientes del mismo cliente esperan en su cola (bot.js):
+// pasado este plazo se sigue como si no hubiera entendido.
+export const DEFAULT_TIMEOUT_MS = 8000;
 // Modelos que admiten el respaldo del servidor cuando el modelo rechaza una solicitud.
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-2', 'claude-fable-5-1']);
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -155,7 +158,7 @@ export function toIntent(restaurant, output) {
  *   La intención sin validar, o null si no se entendió. Lanza si la API falla.
  */
 export function createClaudeInterpreter({
-  apiKey, model = DEFAULT_MODEL, effort = 'low', fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000, onUsage
+  apiKey, model = DEFAULT_MODEL, effort = 'low', fetch: fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, onUsage
 }) {
   if (!apiKey) throw new Error('Falta ANTHROPIC_API_KEY para el intérprete de IA');
   const cache = new WeakMap(); // por restaurante: instrucciones y esquema se arman una vez
