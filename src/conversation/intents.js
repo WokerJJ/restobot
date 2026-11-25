@@ -1,7 +1,9 @@
 // Contrato de intenciones: la forma exacta que puede tener lo que "entiende" el bot.
 //
-// Las reglas de interpret.js ya producen intenciones válidas. Lo que devuelva un modelo de IA
-// (fase 3) no: es texto generado, así que pasa por validateIntent antes de llegar a step().
+// Las reglas de interpret.js producen intenciones con esta forma, aunque un botón viejo o
+// manipulado puede nombrar un producto o un pago que no existe (los handlers de flow.js lo
+// rechazan). Lo que devuelva un modelo de IA es texto generado: step() lo pasa siempre por
+// validateIntent(..., {source: 'ia'}) antes de aplicarlo.
 // La validación revisa la forma y la configuración del restaurante (productos, zonas, pagos),
 // y descarta campos extra. Nunca hay precios aquí: los calcula pricing.js.
 //
