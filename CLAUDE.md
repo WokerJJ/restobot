@@ -20,7 +20,8 @@ Asistente de WhatsApp para restaurantes que usa la Cloud API oficial de Meta: to
 
 ## Arquitectura y convenciones
 
-- `src/conversation/flow.js` es **puro**: `step(restaurante, sesión, mensaje)` devuelve el nuevo estado, las respuestas y, si el cliente confirmó, el pedido. Los efectos (base de datos, envío, avisos) viven en `src/conversation/bot.js`.
+- Interpretar, decidir y calcular van separados: `interpret.js` convierte el mensaje en una intención, `flow.js` la aplica y `pricing.js` calcula. `flow.js` es **puro**: `step(restaurante, sesión, mensaje, {intent})` devuelve el nuevo estado, las respuestas y, si el cliente confirmó, el pedido. Los efectos (base de datos, envío, avisos) viven en `src/conversation/bot.js`.
+- Toda intención que venga de un modelo de IA pasa por `validateIntent` (`src/conversation/intents.js`) antes de llegar a `step`. Un cambio en la interpretación se mide con `npm run evaluar` contra la línea base.
 - Toda respuesta nueva del bot debe pasar `test/contract.test.js`, que valida los límites de la Cloud API: 3 botones, 10 filas, 1024 caracteres por cuerpo.
 - **Esquema:** los cambios van como una migración nueva al final de `MIGRATIONS` en `src/store.js`. Nunca se edita una migración existente.
 - `store.transaction()` es síncrona: no acepta funciones `async`.
