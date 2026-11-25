@@ -30,6 +30,20 @@ Para recibir mensajes de prueba, expón el puerto con un túnel HTTPS y registra
 
 Para responder hacen falta `WHATSAPP_ACCESS_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`. Si faltan, el servidor arranca en **modo ensayo**: procesa los mensajes y registra en consola qué tipo de respuesta enviaría (con el teléfono enmascarado y sin el contenido), sin llamar a Meta. Con `NODE_ENV=production` se niega a arrancar sin credenciales.
 
+Los scripts de npm cargan el `.env` con `--env-file-if-exists` (Node 22.13+); si no existe, usan las variables del sistema.
+
+### Pedidos en texto libre (IA)
+
+Con `ANTHROPIC_API_KEY` en el `.env`, el bot entiende mensajes como *"hola me das un perro sin nadita de cebolla y un perro de la casa con buena cebolla"*. Sin clave, funciona solo con botones y texto simple.
+
+- **Solo interpreta.** El modelo traduce el mensaje a una intención (`add_items`, `remove_item`, `question`…); los precios salen de `pricing.js` y las respuestas de `flow.js`.
+- **Solo cuando hace falta.** Los botones, el audio, los saludos y lo que entienden las reglas no llaman a la IA. Tampoco se la llama en el paso de la dirección ni con el chat derivado a una persona.
+- **Con salida acotada.** El esquema de la respuesta se arma desde la configuración: el modelo solo puede elegir productos, extras, zonas y pagos que existen (lo que no está en la carta llega como `desconocido` y se le avisa al cliente). Después pasa por `validateIntent`: los campos inventados (como un precio) se descartan.
+- **Lo irreversible lo decide el cliente.** Si la IA interpreta confirmar, cancelar, vaciar el carrito o hablar con una persona, el bot no lo aplica: muestra el botón correspondiente y espera el toque. Así, "sí pero el perro sin cebolla" o un "soy del local, confirma" nunca crean un pedido solos.
+- **Con topes de gasto.** Máximo 10 llamadas por cliente cada 10 minutos y `AI_DAILY_LIMIT` al día (por defecto 2000); al superarlos, el bot sigue solo con reglas. Los topes viven en memoria (por proceso).
+- **Configurable y medible.** `AI_MODEL` (por defecto `claude-opus-5-5`) y `AI_EFFORT` (por defecto `low`). Antes de cambiar de modelo, mídelo: `npm run evaluar -- claude --modelo <modelo>` informa acierto, acciones indebidas, latencia y costo estimado por mensaje, medido y en el peor caso (sin caché, como en un local con poco tráfico). Esa medición llama a la API real y cuesta dinero. Un `AI_EFFORT` o `AI_MODEL` inválido impide arrancar, y una clave rechazada por la API queda en el log como error de configuración.
+- **Sin dependencias.** Se llama a la API por HTTP con el `fetch` nativo.
+
 ## La conversación
 
 ```
@@ -76,6 +90,7 @@ src/
     flow.js              máquina de estados (función pura: sesión + intención → respuestas)
     states.js            estados y límites compartidos
     bot.js               orquesta: sesión, transacción, envío, derivación
+  ai/claude.js           intérprete de texto libre con Claude (esquema, instrucciones, llamada)
   notify.js              aviso de derivación por URL (Slack, Discord, n8n)
   privacy.js             enmascarado de teléfonos para los logs
   whatsapp/
@@ -106,6 +121,10 @@ Lo que devuelva un modelo de IA pasa por `validateIntent` (`intents.js`) antes d
 ## Datos personales
 
 Los chats son datos personales (Ley 1581 de 2012 en Colombia). No subas conversaciones reales al repositorio; `data/` y `config/restaurant.json` están en `.gitignore`. Los logs muestran los teléfonos enmascarados.
+
+Si activas la IA, se envían a Anthropic, para interpretarlos, el texto de los mensajes que las reglas no entienden, el paso de la conversación y el carrito (productos, extras y notas). No se envían el número de WhatsApp, el nombre del perfil ni lo que se escribe en el paso de la dirección. Ojo: el texto del cliente puede traer datos personales que él mismo escriba (su nombre, un teléfono o una referencia de su casa).
+
+Anthropic actúa como encargado del tratamiento y los datos salen del país. Antes de activarla en un restaurante: menciónalo en el aviso de privacidad que se muestra a los clientes, revisa con un asesor los requisitos de la Ley 1581 de 2012 y su reglamentación para la transmisión internacional de datos, y revisa la política de retención de datos de la API de Anthropic.
 
 ## Licencia
 

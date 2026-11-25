@@ -9,7 +9,7 @@
 
 import { maskPhone } from './privacy.js';
 
-const REASONS = { boton: 'tocó "Hablar con persona"', frase: 'lo pidió por escrito', ia: 'lo pidió por escrito' };
+const REASONS = { boton: 'tocó "Hablar con persona"', frase: 'lo pidió por escrito' };
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function checkUrl(url) {

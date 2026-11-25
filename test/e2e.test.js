@@ -91,3 +91,11 @@ test('en producción sin credenciales el servidor no arranca en modo ensayo', ()
   assert.throws(() => createClient({ accessToken: '', phoneNumberId: '', nodeEnv: 'production' }, log), /WHATSAPP_ACCESS_TOKEN/);
   assert.throws(() => createClient({ accessToken: 'TOKEN', phoneNumberId: '', nodeEnv: 'production' }, log), /producción/);
 });
+
+test('sin ANTHROPIC_API_KEY el bot funciona solo con reglas y lo avisa', async () => {
+  const { createInterpreter } = await import('../src/server.js');
+  const warns = [];
+  assert.equal(createInterpreter({ anthropicApiKey: '' }, { warn: m => warns.push(m) }), null);
+  assert.match(warns[0], /ANTHROPIC_API_KEY/);
+  assert.equal(typeof createInterpreter({ anthropicApiKey: 'x', aiModel: 'claude-opus-5-5', aiEffort: 'low' }), 'function');
+});

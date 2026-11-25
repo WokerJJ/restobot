@@ -115,6 +115,21 @@ describe('entrega, pago y confirmación', () => {
     assert.equal(step(r, conCarrito(S.DIRECCION, { zoneId: 'centro' }), btn('pay:0')).state, S.DIRECCION);
   });
 
+  test('una dirección muy corta o muy larga explica el problema y sigue contando como fallo (BUG-022)', () => {
+    const sesion = conCarrito(S.DIRECCION, { zoneId: 'centro' });
+    const corta = step(r, sesion, txt('cl1'));
+    assert.equal(corta.state, S.DIRECCION);
+    assert.equal(corta.replies[0].body, 'La dirección es muy corta: escribe barrio, calle y número.');
+    assert.equal(corta.data.misses, 1);
+    const larga = step(r, sesion, txt('Calle 10 # 5-20 '.repeat(16).slice(0, 250)));
+    assert.equal(larga.state, S.DIRECCION);
+    assert.equal(larga.replies[0].body, 'La dirección es muy larga (máximo 200 caracteres).');
+    assert.equal(larga.data.address, undefined);
+    const segunda = step(r, { ...sesion, data: { ...sesion.data, misses: 1 } }, txt('cl1'));
+    assert.ok(ids(segunda).includes('human'), 'el segundo fallo ofrece hablar con una persona');
+    assert.match(step(r, sesion, btn('pay:0')).replies[0].body, /No te entendí/, 'un botón viejo sigue siendo "no entendí"');
+  });
+
   test('pago → confirmación con la lectura del pedido (describeOrder)', () => {
     const res = step(r, conCarrito(S.PAGO, { zoneId: 'norte', address: 'Calle 1 # 2-3' }), btn('pay:1'));
     assert.equal(res.state, S.CONFIRMACION);
@@ -619,5 +634,70 @@ describe('remove_item por línea (EVA-021)', () => {
     const res = rm({ qty: 3 });
     assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 1, note: 'sin cebolla' }]);
     assert.equal(res.replies[0].body, 'Listo, quité 3 × Perro sencillo.');
+  });
+});
+
+describe('acciones irreversibles que decide la IA piden un toque (BUG-024)', () => {
+  const ia = (session, intent) => step(r, session, txt('x'), { intent });
+  const confirmacion = conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' });
+
+  test('confirm de la IA no crea el pedido: muestra el resumen con el botón; el botón sí confirma', () => {
+    const res = ia({ ...confirmacion, data: { ...confirmacion.data, misses: 1 } }, { type: 'confirm' });
+    assert.equal(res.order, undefined);
+    assert.equal(res.state, S.CONFIRMACION);
+    assert.match(res.replies[0].body, /toca \*Confirmar\*/);
+    assert.match(bodies(res), /Revisa tu pedido/);
+    assert.ok(ids(res).includes('confirm'));
+    assert.doesNotMatch(bodies(res), /No te entendí/);
+    assert.equal(res.data.misses, 0, 'no cuenta como "no entendí"');
+    assert.ok(step(r, confirmacion, btn('confirm')).order, 'el botón confirma');
+    assert.ok(step(r, confirmacion, txt('sí')).order, 'la frase inequívoca de las reglas confirma');
+  });
+
+  test('cancel de la IA no borra el carrito: pregunta qué se pierde con "Sí, cancelar" y "No, seguir"', () => {
+    const res = ia(conCarrito(S.CARRITO), { type: 'cancel' });
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'especial', qty: 2 }]);
+    assert.match(res.replies.at(-1).body, /2 producto/);
+    assert.deepEqual(res.replies.at(-1).buttons, [{ id: 'cancel', title: 'Sí, cancelar' }, { id: 'continue', title: 'No, seguir' }]);
+    assert.doesNotMatch(bodies(res), /No te entendí/);
+
+    const si = step(r, res, btn('cancel'));
+    assert.equal(si.state, S.INICIO);
+    assert.deepEqual(si.data, {});
+    const no = step(r, res, btn('continue'));
+    assert.equal(no.state, S.CARRITO, '"No, seguir" vuelve a mostrar el paso actual');
+    assert.deepEqual(no.data.cart, [{ itemId: 'especial', qty: 2 }]);
+    assert.doesNotMatch(bodies(no), /No te entendí/);
+  });
+
+  test('clear_cart de la IA no vacía el carrito: muestra el carrito con el botón "Vaciar carrito"', () => {
+    const res = ia(conCarrito(S.CARRITO), { type: 'clear_cart' });
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'especial', qty: 2 }]);
+    assert.match(res.replies[0].body, /toca \*Vaciar carrito\*/);
+    assert.ok(ids(res).includes('cart:clear'));
+    assert.deepEqual(step(r, conCarrito(S.CARRITO), btn('cart:clear')).data.cart, [], 'el botón sí vacía');
+  });
+
+  test('human de la IA no deriva: ofrece el botón con el paso actual; el botón sí deriva', () => {
+    const res = ia(conCarrito(S.CARRITO), { type: 'human' });
+    assert.equal(res.state, S.CARRITO);
+    assert.equal(res.handoff, undefined);
+    assert.ok(ids(res).includes('human'));
+    assert.ok(ids(res).includes('cart:checkout'), 'con el paso actual');
+    assert.doesNotMatch(bodies(res), /No te entendí/);
+    const tap = step(r, res, btn('human'));
+    assert.equal(tap.state, S.HUMANO);
+    assert.deepEqual(tap.handoff, { reason: 'boton' });
+  });
+
+  test('una de estas intenciones de la IA fuera de lugar sigue siendo "no entendí"', () => {
+    for (const intent of [{ type: 'confirm' }, { type: 'clear_cart' }]) {
+      const res = ia(conCarrito(S.MENU, { menuPage: 1 }), intent);
+      assert.equal(res.state, S.MENU);
+      assert.match(res.replies[0].body, /No te entendí/);
+      assert.equal(res.data.misses, 1);
+    }
   });
 });

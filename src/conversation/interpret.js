@@ -7,7 +7,7 @@
 // Intenciones que produce (todas con un campo `type`):
 //   human {via} · cancel · menu · media {kind} · start_order · select_item {itemId}
 //   menu_page {page} · view_cart · quantity {qty} · add_more · checkout · clear_cart
-//   zone {zoneId} · pickup · address {text} · payment {index} · confirm · edit
+//   zone {zoneId} · pickup · address {text} · payment {index} · confirm · edit · continue
 
 import { STATES as S } from './states.js';
 
@@ -41,6 +41,20 @@ export function normalize(s) {
     .trim();
 }
 
+// Saludos y cortesías: "hola", "buenas tardes", "ola, qué tal". Las frases se quitan antes que
+// las palabras sueltas, para no tomar "que" o "como" como saludo fuera de ellas.
+const GREETING_PHRASES = /\b(?:que tal|como (?:estas|esta|vas|va))\b/g;
+const GREETING_WORDS = /^(?:h?o+la+s?|holi+s?|buen(?:as|os)?|dias?|tardes?|noches?|saludos?|hey)$/;
+
+/**
+ * Verdadero si el mensaje es solo un saludo (sin nada más que entender). Así bot.js no le paga a
+ * la IA por un "hola" que flow.js contesta igual con el saludo (EVA-027).
+ */
+export function isGreeting(raw) {
+  const words = normalize(raw).replace(GREETING_PHRASES, ' ').split(' ').filter(Boolean);
+  return normalize(raw) !== '' && words.every(w => GREETING_WORDS.test(w));
+}
+
 function parseQty(t) {
   if (/^\d{1,3}$/.test(t)) return Number(t);
   return NUMBER_WORDS[t] ?? null;
@@ -60,7 +74,8 @@ function fromButton(id) {
     'cart:clear': { type: 'clear_cart' },
     'cart:edit': { type: 'edit' },
     pickup: { type: 'pickup' },
-    confirm: { type: 'confirm' }
+    confirm: { type: 'confirm' },
+    continue: { type: 'continue' }
   };
   if (fixed[id]) return fixed[id];
   let m;

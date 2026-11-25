@@ -1,7 +1,8 @@
 // Orquesta la conversación: carga la sesión, aplica step(), guarda y envía.
 // flow.js decide; este módulo solo hace efectos (base de datos, red, logs).
 
-import { step, confirmedReplies, STATES } from './flow.js';
+import { step, confirmedReplies, resolveState, STATES } from './flow.js';
+import { interpret, isGreeting } from './interpret.js';
 import { formatCOP } from '../pricing.js';
 import { maskPhone } from '../privacy.js';
 
@@ -17,6 +18,15 @@ export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
 // cliente siga escribiendo. El aviso al local puede fallar y nadie liberar el chat: sin
 // este tope, un cliente que escribe una vez al día dejaría al bot callado para siempre.
 export const HANDOFF_MAX_MS = 72 * 60 * 60 * 1000;
+
+// Topes de gasto de la IA (BUG-023): cualquier número puede escribirle al local, y cada texto
+// que las reglas no entienden es una llamada pagada. Al pasarlos, el bot sigue solo con reglas.
+export const AI_LIMIT_PER_CUSTOMER = 10;
+export const AI_WINDOW_MS = 10 * 60 * 1000;
+export const AI_DAILY_LIMIT = 2000;
+
+// Respuestas de la API de la IA que indican una configuración inválida, no una falla pasajera.
+const CONFIG_ERRORS = [400, 401, 403];
 
 // Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
 const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -37,12 +47,51 @@ export function releaseHandoff(store, customer, now = Date.now()) {
  *          notifyHandoff?:(h:{customer:string, reason:string, cartItems:number, at:number,
  *                             ttlHours:number, expiresAt:number}) => Promise<boolean>}} deps
  *   notifyHandoff: aviso al local cuando un cliente pide una persona (ver src/notify.js).
+ *   interpretAI: intérprete de texto libre (ver src/ai/claude.js); sin él, solo reglas.
+ *   aiLimitPerCustomer / aiWindowMs: llamadas a la IA por cliente en una ventana móvil.
+ *   aiDailyLimit: llamadas a la IA por día del calendario en timeZone (la del restaurante).
  */
 export function createBot({
   restaurant, store, client, log = console, now = Date.now,
   sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, handoffMaxMs = HANDOFF_MAX_MS,
-  notifyHandoff = async () => false
+  notifyHandoff = async () => false, interpretAI = null,
+  aiLimitPerCustomer = AI_LIMIT_PER_CUSTOMER, aiWindowMs = AI_WINDOW_MS, aiDailyLimit = AI_DAILY_LIMIT,
+  timeZone = restaurant.timezone || 'America/Bogota'
 }) {
+  // Las cuentas de la IA viven en memoria: con varios procesos, cada uno lleva la suya (el tope
+  // real es el configurado por el número de procesos), y un reinicio las pone en cero.
+  const aiCalls = new Map(); // cliente → { times: [ms de cada llamada en la ventana], warned }
+  const daily = { day: null, count: 0, warned: false };
+  const dayOf = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  let aiConfigReported = false; // un bot por proceso: el error de configuración sale una vez
+
+  // Dice si se puede llamar a la IA y, si sí, cuenta la llamada. Avisa en el log una vez por
+  // ventana (por cliente) o por día (global), con el teléfono enmascarado.
+  function allowAI(customer, t) {
+    // Se limpian las entradas vencidas en cada consulta: el Map solo guarda clientes activos.
+    for (const [key, e] of aiCalls) {
+      e.times = e.times.filter(x => t - x < aiWindowMs);
+      if (!e.times.length) aiCalls.delete(key);
+    }
+    const entry = aiCalls.get(customer) ?? { times: [], warned: false };
+    if (entry.times.length >= aiLimitPerCustomer) {
+      if (!entry.warned) log.warn?.(`límite de IA por cliente alcanzado (${maskPhone(customer)}): sigue solo con reglas`);
+      entry.warned = true;
+      return false;
+    }
+    const day = dayOf.format(t);
+    if (daily.day !== day) Object.assign(daily, { day, count: 0, warned: false });
+    if (daily.count >= aiDailyLimit) {
+      if (!daily.warned) log.warn?.(`tope diario de IA alcanzado (${aiDailyLimit} llamadas): el bot sigue solo con reglas hasta mañana`);
+      daily.warned = true;
+      return false;
+    }
+    entry.times.push(t);
+    aiCalls.set(customer, entry);
+    daily.count++;
+    return true;
+  }
+
   // Cola por cliente: los mensajes de una misma persona se procesan en orden, uno a la vez.
   // Hoy evita que las respuestas de dos toques seguidos se intercalen en el chat; cuando
   // step() sea asíncrono (IA, fase 3) evitará además que dos mensajes lean la misma sesión.
@@ -96,7 +145,37 @@ export function createBot({
       ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS)
       : [];
 
-    const result = step(restaurant, session, msg);
+    // La IA solo recibe texto que las reglas no entienden: los botones, el audio y las frases
+    // simples van por reglas, sin costo ni espera. Si la IA falla, se sigue como si no hubiera
+    // entendido. step valida su intención con el contrato de la IA antes de aplicarla.
+    // En la dirección tampoco (BUG-022): ahí el texto es solo la dirección, y si las reglas no
+    // la aceptan es por su largo, que la IA no arregla. Llamarla solo arriesga que una dirección
+    // reescrita (o un cancel) reemplace lo que el cliente escribió, y manda la dirección a un tercero.
+    // Un saludo solo, en el inicio o en el saludo, tampoco (EVA-027): step responde el saludo
+    // igual, así que la IA solo agregaría costo y espera.
+    let intent;
+    if (interpretAI && msg.type === 'text') {
+      // El mismo paso y los mismos datos que usará step (EVA-033).
+      const { state, data } = resolveState(restaurant, session);
+      const greeting = (state === STATES.INICIO || state === STATES.SALUDO) && isGreeting(msg.text);
+      if (state !== STATES.HUMANO && state !== STATES.DIRECCION && !greeting && interpret(restaurant, state, msg) === null &&
+        allowAI(msg.from, t)) {
+        try {
+          intent = (await interpretAI(restaurant, state, msg, { data })) ?? null;
+        } catch (err) {
+          // 400, 401 o 403 no se arreglan solos (clave revocada, modelo o esfuerzo inválido): se
+          // registra como error una sola vez, para que se vea sin llenar el log con cada mensaje.
+          if (CONFIG_ERRORS.includes(err.status)) {
+            if (!aiConfigReported) log.error?.(`configuración de la IA inválida (${err.message}): revisa ANTHROPIC_API_KEY, AI_MODEL y AI_EFFORT. El bot sigue solo con reglas.`);
+            aiConfigReported = true;
+          } else {
+            log.warn?.(`la IA no respondió (${maskPhone(msg.from)}): ${err.message}`);
+          }
+        }
+      }
+    }
+
+    const result = step(restaurant, session, msg, intent === undefined ? {} : { intent });
     // flow.js no conoce el reloj: el inicio de la derivación se anota aquí.
     const data = result.handoff ? { ...result.data, handoffAt: t } : result.data;
     let replies = abandoned

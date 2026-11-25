@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { DEFAULT_MODEL, AI_EFFORTS } from './ai/claude.js';
 
 export function loadEnv(env = process.env) {
   return {
@@ -10,9 +11,34 @@ export function loadEnv(env = process.env) {
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || '',
     apiVersion: env.WHATSAPP_API_VERSION || 'v27.0',
     handoffWebhookUrl: env.HANDOFF_WEBHOOK_URL || '',
+    anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    aiModel: aiModel(env.AI_MODEL),
+    aiEffort: aiEffort(env.AI_EFFORT),
+    aiDailyLimit: dailyLimit(env.AI_DAILY_LIMIT),
     dbPath: env.DB_PATH || 'data/restobot.db',
     restaurantPath: env.RESTAURANT_CONFIG || 'config/restaurant.json'
   };
+}
+
+// Un modelo o un esfuerzo mal escrito haría que cada mensaje termine en "no entendí" con solo
+// un aviso en el log: se rechaza al arrancar (EVA-030).
+function aiModel(value) {
+  const model = value || DEFAULT_MODEL;
+  if (!model.startsWith('claude-')) throw new Error(`AI_MODEL debe ser un modelo de Claude (claude-...): ${value}`);
+  return model;
+}
+
+function aiEffort(value) {
+  const effort = value || 'low';
+  if (!AI_EFFORTS.includes(effort)) throw new Error(`AI_EFFORT debe ser uno de ${AI_EFFORTS.join(', ')}: ${value}`);
+  return effort;
+}
+
+// Un valor inválido no puede quitar el tope en silencio (NaN nunca se alcanza): se rechaza.
+function dailyLimit(value) {
+  const n = Number(value || 2000);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`AI_DAILY_LIMIT debe ser un entero mayor o igual a 0: ${value}`);
+  return n;
 }
 
 export function loadRestaurant(path) {
