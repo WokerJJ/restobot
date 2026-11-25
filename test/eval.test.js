@@ -177,9 +177,33 @@ test('el costo se informa medido y en el peor caso, sin caché (EVA-029)', async
 
 test('el costo máximo de una corrida es un techo: prompt como escritura en caché y respuesta completa', async () => {
   const { maxRunCost, PRICES } = await import('../eval/cost.js');
-  // 10 llamadas, prompt de 3000 caracteres (1000 tokens), respuesta de 1000 tokens, Opus 5.5:
+  // 10 llamadas, prompt de 2500 caracteres (1000 tokens), respuesta de 1000 tokens, Opus 5.5:
   // 10 × (1000 × 4 × 1,25 + 1000 × 20) / 1e6 = 0,25
-  assert.equal(maxRunCost({ calls: 10, promptChars: 3000, maxTokens: 1000 }, PRICES['claude-opus-5-5']), 0.25);
-  assert.equal(maxRunCost({ calls: 10, promptChars: 3000, maxTokens: 1000 }, undefined), null, 'sin precio no inventa un número');
+  assert.equal(maxRunCost({ calls: 10, promptChars: 2500, maxTokens: 1000 }, PRICES['claude-opus-5-5']), 0.25);
+  assert.equal(maxRunCost({ calls: 10, promptChars: 2500, maxTokens: 1000 }, undefined), null, 'sin precio no inventa un número');
   assert.ok(maxRunCost({ calls: 72, promptChars: 6000, maxTokens: 1024 }, PRICES['claude-haiku-5-5']) < 0.1);
+});
+
+test('el prompt del techo incluye el esquema de salida y el mensaje más largo (EVA-034, BUG-026)', async () => {
+  const { promptCharsFor } = await import('../eval/cost.js');
+  const { buildSystemPrompt, buildSchema } = await import('../src/ai/claude.js');
+  const chars = promptCharsFor(r, cases);
+  // El esquema viaja en cada llamada y mide casi lo mismo que las instrucciones.
+  assert.ok(JSON.stringify(buildSchema(r)).length > 3000);
+  assert.ok(chars > buildSystemPrompt(r).length + 3000, `${chars} caracteres no incluyen el esquema`);
+});
+
+test('el costo máximo no queda por debajo del peor caso con un prompt denso (EVA-034, BUG-026)', async () => {
+  const { promptCharsFor, maxRunCost, estimateCost, PRICES } = await import('../eval/cost.js');
+  const { MAX_TOKENS } = await import('../src/ai/claude.js');
+  const promptChars = promptCharsFor(r, cases);
+  const calls = cases.length;
+  // Un prompt de JSON con mucha puntuación rinde unos 2,5 caracteres por token; cada respuesta usa todo max_tokens.
+  const promptTokens = Math.ceil(promptChars / 2.5);
+  const usage = { input: calls * promptTokens, cacheWrite: 0, cacheRead: 0, output: calls * MAX_TOKENS, calls };
+  for (const model of Object.keys(PRICES)) {
+    const max = maxRunCost({ calls, promptChars, maxTokens: MAX_TOKENS }, PRICES[model]);
+    const worst = estimateCost(usage, PRICES[model]).worstCaseUsd;
+    assert.ok(max >= worst, `${model}: techo US$${max} < peor caso US$${worst}`);
+  }
 });

@@ -1,6 +1,8 @@
 // Costo estimado de una evaluación con un intérprete de IA (scripts/evaluar.js). Función pura,
 // aparte del script, para poder probarla: el script usa top-level await y no se importa.
 
+import { buildSystemPrompt, buildSchema, buildUserContent } from '../src/ai/claude.js';
+
 // La escritura en caché cuesta 1,25 veces la entrada.
 export const CACHE_WRITE_FACTOR = 1.25;
 
@@ -12,9 +14,23 @@ export const PRICES = Object.freeze({
   'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01 }
 });
 
-// Caracteres por token, a la baja a propósito (el español suele rendir algo más): así el
-// estimado de tokens del prompt queda por encima del real.
-const CHARS_PER_TOKEN = 3;
+// Caracteres por token: una cota conservadora, no una medición. El prompt lleva un esquema JSON
+// con mucha puntuación, que rinde menos que el español corrido; a la baja a propósito, para que
+// el estimado de tokens del prompt quede por encima del real (EVA-034, BUG-026).
+const CHARS_PER_TOKEN = 2.5;
+
+/**
+ * Caracteres de entrada que puede enviar una llamada (EVA-034, BUG-026): las instrucciones, el
+ * esquema de salida (output_config.format, que viaja en cada llamada y mide casi lo mismo que las
+ * instrucciones) y el mensaje más largo de los casos.
+ * @param {object} restaurant
+ * @param {{estado:string, datos?:object, texto:string}[]} cases
+ * @returns {number}
+ */
+export function promptCharsFor(restaurant, cases) {
+  const longestMessage = Math.max(0, ...cases.map(c => buildUserContent(restaurant, c.estado, c.datos, c.texto).length));
+  return buildSystemPrompt(restaurant).length + JSON.stringify(buildSchema(restaurant)).length + longestMessage;
+}
 
 /**
  * Costo máximo posible de una corrida, antes de hacerla: cada llamada cobra todo el prompt como

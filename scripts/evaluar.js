@@ -8,14 +8,14 @@
 // Es una medición, no una prueba: no falla si el porcentaje es bajo. Sirve para comparar
 // intérpretes (reglas, distintos modelos de IA) sobre los mismos casos.
 // Ojo: el intérprete de Claude llama a la API real y cuesta dinero. Sin --confirmar no hace
-// ninguna llamada: solo muestra cuántas haría y el costo máximo posible. Es un candado para que
+// ninguna llamada: solo muestra cuántas haría y el costo máximo aproximado. Es un candado para que
 // nadie (ni una persona ni un agente) gaste por error.
 
 import { loadEnv, loadRestaurant } from '../src/config.js';
 import { interpret } from '../src/conversation/interpret.js';
-import { createClaudeInterpreter, buildSystemPrompt, MAX_TOKENS } from '../src/ai/claude.js';
+import { createClaudeInterpreter, MAX_TOKENS } from '../src/ai/claude.js';
 import { loadCases, evaluate } from '../eval/grade.js';
-import { estimateCost, maxRunCost, PRICES } from '../eval/cost.js';
+import { estimateCost, maxRunCost, promptCharsFor, PRICES } from '../eval/cost.js';
 
 const args = process.argv.slice(2);
 const flag = name => { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; };
@@ -38,12 +38,13 @@ if (name === 'reglas') {
   const effort = flag('--esfuerzo') || env.aiEffort;
   if (!args.includes('--confirmar')) {
     // Candado de gasto: sin --confirmar no se llama a la API.
-    // El prompt de cada llamada: las instrucciones más el mensaje con el carrito (~400 caracteres).
-    const max = maxRunCost({ calls: cases.length, promptChars: buildSystemPrompt(restaurant).length + 400, maxTokens: MAX_TOKENS }, PRICES[model]);
+    // El prompt de cada llamada: instrucciones, esquema de salida y el mensaje más largo de los casos.
+    const max = maxRunCost({ calls: cases.length, promptChars: promptCharsFor(restaurant, cases), maxTokens: MAX_TOKENS }, PRICES[model]);
     console.log(`Esto haría ${cases.length} llamadas a ${model} (esfuerzo ${effort}).`);
     console.log(max === null
       ? 'No conozco el precio de ese modelo: revisa la página de precios de Anthropic antes de correrlo.'
-      : `Costo máximo posible: US$${max.toFixed(2)} (si cada respuesta usara todo max_tokens y nada saliera de la caché; el real es menor).`);
+      : `Costo máximo aproximado: US$${max.toFixed(2)} (si cada respuesta usara todo max_tokens y nada saliera de la caché; el real suele ser menor).\n` +
+        'No incluye el respaldo del servidor: si la API rechaza una llamada, podría responderla otro modelo y cobrar su precio.');
     console.log(`Para ejecutarlo: npm run evaluar -- claude --modelo ${model} --esfuerzo ${effort} --confirmar`);
     process.exit(0);
   }
