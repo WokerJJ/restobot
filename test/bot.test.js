@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
 import { openStore } from '../src/store.js';
+import { toIntent } from '../src/ai/claude.js';
 import { createBot, releaseHandoff, maskPhone, SESSION_TTL_MS, HANDOFF_TTL_MS, HANDOFF_MAX_MS } from '../src/conversation/bot.js';
 
 const restaurant = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
@@ -472,6 +473,20 @@ test('en la dirección no se llama a la IA: el texto no sale ni se reescribe (BU
   await say('Calle 10 # 5-20');
   assert.equal(store.getSession(CLIENTE).state, 'pago');
   assert.equal(ai.calls.length, 0);
+});
+
+test('la IA quita la línea exacta sin queso y deja la que tiene queso (EVA-028)', async () => {
+  // La salida tal como la manda el modelo (con nulos), convertida por toIntent como en claude.js.
+  const ai = fakeAI({ 'quita el perro sencillo': toIntent(restaurant, { intent:
+    { type: 'remove_item', itemId: 'perro', qty: null, extras: [], note: null, exact: true } }) });
+  const { store, say, tap } = setup({ interpretAI: ai });
+  await tap('menu');
+  store.saveSession(CLIENTE, { state: 'carrito', data: { cart: [
+    { itemId: 'perro', qty: 1, extras: ['queso'] }, { itemId: 'perro', qty: 1 }
+  ] } }, 1_000_000);
+  await say('quita el perro sencillo');
+  assert.equal(ai.calls.length, 1);
+  assert.deepEqual(store.getSession(CLIENTE).data.cart, [{ itemId: 'perro', qty: 1, extras: ['queso'] }]);
 });
 
 test('mientras atiende una persona, la IA no se llama', async () => {

@@ -105,6 +105,20 @@ test('convierte la salida en una intención válida para el contrato de la IA', 
     { type: 'remove_item', itemId: 'perro', note: 'sin cebolla' });
 });
 
+test('remove_item puede nombrar la línea exacta: exact en el esquema, el prompt y la conversión (EVA-028)', () => {
+  const remove = buildSchema(r).properties.intent.anyOf.find(v => v.properties?.type?.const === 'remove_item');
+  assert.deepEqual(remove.properties.exact, { type: 'boolean' });
+  assert.ok(remove.required.includes('exact'));
+  assert.match(buildSystemPrompt(r), /exact en true/);
+
+  const salida = extra => ({ intent: { type: 'remove_item', itemId: 'perro', qty: null, extras: [], note: null, ...extra } });
+  const exacta = toIntent(r, salida({ exact: true }));
+  assert.deepEqual(validateIntent(r, exacta, { source: 'ia' }), { type: 'remove_item', itemId: 'perro', exact: true });
+  const libre = toIntent(r, salida({ exact: false }));
+  assert.equal('exact' in libre, false, 'exact: false se descarta');
+  assert.deepEqual(validateIntent(r, libre, { source: 'ia' }), { type: 'remove_item', itemId: 'perro' });
+});
+
 test('rechazo, respuesta cortada o JSON roto cuentan como "no entendí"', async () => {
   assert.equal(await interp(fakeFetch({ stop: 'refusal' }))(r, 'menu', msg('x')), null);
   assert.equal(await interp(fakeFetch({ stop: 'max_tokens' }))(r, 'menu', msg('x')), null);
