@@ -19,9 +19,12 @@ Cada fase termina con pruebas en verde y algo que se puede demostrar.
 ## Fase 3 — IA para texto libre
 - Interpretación de pedidos y modificaciones ("sin salsa de piña") con tool calling.
 - Extras del menú ("con queso extra") y notas por producto: líneas del carrito con extras y notas.
-- Separar la interpretación del texto de las transiciones de `flow.js`, para que la IA la reemplace sin tocar la persistencia.
-- Preguntas frecuentes desde la configuración del restaurante.
-- Conjunto de evaluación con chats anonimizados.
+- ✅ Separar la interpretación del texto de las transiciones de `flow.js` (`interpret.js`), con un contrato de intenciones validado (`intents.js`).
+- ✅ Conjunto de evaluación (`eval/`, `npm run evaluar`) con métrica de acciones irreversibles indebidas. Línea base de las reglas: 35/67 (52 %), 0 indebidas.
+- Líneas del carrito con extras y notas (EVA-002): identidad por producto + extras + nota, tope de 50 por producto sumando sus líneas, extras permitidos por producto, quitar o cambiar una línea, y aplicar `add_items` desde el primer mensaje (estado inicio).
+- Intérprete con un modelo por API, validado con `validateIntent` y medido contra la línea base.
+- Preguntas frecuentes desde la configuración del restaurante (intención `question`).
+- Evaluación con chats reales anonimizados (Ley 1581), además de los casos inventados.
 
 ## Fase 4 — Notas de voz
 - Descarga del audio, conversión con ffmpeg y transcripción vía API.

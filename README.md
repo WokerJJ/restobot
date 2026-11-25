@@ -20,6 +20,7 @@ cp .env.example .env
 cp config/restaurant.example.json config/restaurant.json   # edita tu menú
 npm test
 npm run simular      # prueba la conversación en la terminal, sin Meta
+npm run evaluar      # mide la interpretación de mensajes sobre eval/interpretacion.json
 npm start
 ```
 
@@ -67,7 +68,10 @@ src/
   store.js               SQLite: mensajes, pedidos y sesiones
   config.js              carga y validación del restaurante
   conversation/
-    flow.js              máquina de estados (función pura: sesión + mensaje → respuestas)
+    interpret.js         mensaje → intención (reglas; la IA entra aquí en la fase 3)
+    intents.js           contrato de intenciones y validateIntent (frontera de confianza)
+    flow.js              máquina de estados (función pura: sesión + intención → respuestas)
+    states.js            estados y límites compartidos
     bot.js               orquesta: sesión, transacción, envío, derivación
   notify.js              aviso de derivación por URL (Slack, Discord, n8n)
   privacy.js             enmascarado de teléfonos para los logs
@@ -75,15 +79,26 @@ src/
     client.js            envío por la Cloud API (texto, botones, listas) y cliente de ensayo
     parse.js             parser del payload de Meta
     signature.js         firma HMAC
-scripts/                 simular.js (chat en la terminal) y derivaciones.js
+scripts/                 simular.js (chat en la terminal), derivaciones.js y evaluar.js
+eval/                    conjunto de evaluación de la interpretación y su calificación
 test/                    node --test
 config/                  restaurant.example.json
 docs/ROADMAP.md          fases del proyecto
 ```
 
-### Por qué `flow.js` es una función pura
+### Interpretar, decidir, calcular
 
-`step(restaurante, sesión, mensaje)` devuelve el nuevo estado, las respuestas y, si se confirmó, el pedido, sin tocar la base de datos ni la red. Así cada transición se prueba con una sola llamada y la fase 3 (IA) puede cambiar cómo se interpreta el texto sin tocar la persistencia ni el envío, que viven en `bot.js`.
+Cada mensaje pasa por tres piezas separadas:
+
+1. **Interpretar** (`interpret.js`): convierte texto, botones o audio en una **intención** con forma fija, por ejemplo `{type: 'quantity', qty: 2}`. Hoy son reglas; en la fase 3 se suma un modelo de IA con el mismo contrato.
+2. **Decidir** (`flow.js`): `step(restaurante, sesión, mensaje, {intent})` aplica la intención al estado actual y devuelve el nuevo estado, las respuestas y, si se confirmó, el pedido. Es una función pura: no toca la base de datos ni la red, así cada transición se prueba con una sola llamada.
+3. **Calcular** (`pricing.js`): precios, totales y domicilios. La IA nunca calcula montos.
+
+Lo que devuelva un modelo de IA pasa por `validateIntent` (`intents.js`) antes de llegar a `step`: debe nombrar productos, zonas y pagos que existan en la configuración, y los campos extra (como un total inventado) se descartan.
+
+### Medir la interpretación
+
+`npm run evaluar` ejecuta un intérprete sobre `eval/interpretacion.json`: 67 mensajes inventados en español colombiano con la intención correcta de cada uno. Informa el acierto por categoría, cada fallo y, aparte, las acciones irreversibles indebidas (confirmar, cancelar, vaciar el carrito o derivar cuando no correspondía), cuyo umbral es 0. Es una medición, no una prueba: sirve para comparar intérpretes con los mismos casos. Línea base de las reglas: **35/67 (52 %)**, con 0 acciones indebidas; fallan en pedidos en texto libre ("dos perros, uno sin cebolla") y en preguntas, que es lo que resolverá la IA.
 
 ## Datos personales
 

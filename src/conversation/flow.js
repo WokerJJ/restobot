@@ -1,60 +1,24 @@
 // Máquina de estados de la conversación guiada.
 //
 // step() es una función pura: recibe la configuración del restaurante, la sesión
-// guardada y el mensaje entrante, y devuelve la nueva sesión, las respuestas a
-// enviar y, si el cliente confirmó, el pedido a guardar. No toca la base de datos
-// ni la red; de eso se encarga bot.js. Los precios siempre salen de pricing.js.
+// guardada, el mensaje entrante y (opcional) la intención ya interpretada, y devuelve
+// la nueva sesión, las respuestas a enviar y, si el cliente confirmó, el pedido a
+// guardar. No entiende texto (eso es interpret.js), no toca la base de datos ni la red
+// (eso es bot.js) y los precios siempre salen de pricing.js.
 
 import { priceOrder, describeOrder, formatCOP } from '../pricing.js';
+import { STATES, MAX_QTY } from './states.js';
+import { interpret, normalize } from './interpret.js';
+import { validateIntent } from './intents.js';
 
-export const STATES = Object.freeze({
-  INICIO: 'inicio',
-  SALUDO: 'saludo',
-  MENU: 'menu',
-  CANTIDAD: 'cantidad',
-  CARRITO: 'carrito',
-  ZONA: 'zona',
-  DIRECCION: 'direccion',
-  PAGO: 'pago',
-  CONFIRMACION: 'confirmacion',
-  HUMANO: 'humano'
-});
+// Se reexportan para quien ya los importaba desde aquí.
+export { STATES, MAX_QTY, normalize };
 const S = STATES;
 
-export const MAX_QTY = 50;
 export const MENU_PAGE_SIZE = 8; // 10 filas por lista: 8 productos + "ver más" + "ver carrito"
 const MISSES_BEFORE_OFFER = 2;
 const BODY_MAX = 1024;
 const HUMAN_BUTTON = { id: 'human', title: 'Hablar con persona' };
-
-// Derivación por frase: solo con intención explícita, para no derivar con frases como
-// "una salchipapa para cada persona" o "la recoge otra persona". Se evalúa sobre el
-// texto normalizado y vale si:
-//   - el mensaje es solo el destinatario: "asesor", "una persona", "humano";
-//   - un verbo de contacto va seguido de él o de "alguien": "quiero hablar con un asesor",
-//     "comunicame con alguien", "que me atienda una persona";
-//   - "quiero/necesito/quisiera/pido" va seguido directamente de él: "necesito una persona".
-const HUMAN_WHO = '(?:una? )?(?:persona|asesora?|humana?|agente|operadora?)';
-const HUMAN_RE = new RegExp(
-  `^${HUMAN_WHO}$` +
-  `|\\b(?:hablar|hablo|comunicar(?:me)?|comunicame|comuniqueme|contactar(?:me)?|pasar(?:me)?|pasame) con (?:${HUMAN_WHO}|alguien)\\b` +
-  `|\\b(?:atienda|atiendan|atender) (?:${HUMAN_WHO}|alguien)\\b` +
-  `|\\b(?:quiero|necesito|quisiera|pido) ${HUMAN_WHO}\\b`
-);
-const CANCEL_WORDS = new Set(['cancelar', 'cancela', 'cancelar pedido', 'cancelo']);
-const MENU_WORDS = new Set(['menu', 'ver menu', 'carta', 'la carta']);
-const YES_WORDS = new Set(['si', 'confirmar', 'confirmo', 'dale', 'listo', 'de una']);
-const NUMBER_WORDS = { un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
-
-/** Minúsculas, sin tildes ni signos: "¡Menú!" → "menu". */
-export function normalize(s) {
-  return String(s ?? '')
-    .normalize('NFD').replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 const clip = (s, n) => (s.length <= n ? s : s.slice(0, n - 1) + '…');
 const text = body => ({ kind: 'text', body });
@@ -67,16 +31,6 @@ function withButtons(body, buttons, shortBody = '¿Qué hacemos?') {
 
 const priceCart = (restaurant, data, withZone = false) =>
   priceOrder(restaurant, data.cart, withZone && !data.pickup ? { zoneId: data.zoneId } : {});
-
-function parseQty(t) {
-  if (/^\d{1,3}$/.test(t)) return Number(t);
-  return NUMBER_WORDS[t] ?? null;
-}
-
-function findItemByText(restaurant, t) {
-  if (!t) return null;
-  return restaurant.menu.find(m => normalize(m.name) === t || (m.aliases || []).some(a => normalize(a) === t)) || null;
-}
 
 // ---------------------------------------------------------------- mensajes por estado
 
@@ -221,67 +175,61 @@ function addToCart(data, itemId, qty) {
   return cart;
 }
 
+// Cada estado acepta solo las intenciones que le corresponden; cualquier otra (un botón viejo
+// de otro paso, una intención fuera de lugar) devuelve null y se trata como "no entendí".
 const handlers = {
-  [S.SALUDO](r, data, { replyId, t }) {
-    if (replyId === 'menu' || /\b(pedir|pedido|ordenar|domicilio)\b/.test(t)) return go(r, S.MENU, { ...data, menuPage: 1 });
+  [S.SALUDO](r, data, intent) {
+    if (intent.type === 'start_order') return go(r, S.MENU, { ...data, menuPage: 1 });
     return null;
   },
 
-  [S.MENU](r, data, { replyId, t }) {
-    const page = replyId?.match(/^menu:page:(\d+)$/);
-    if (page) return go(r, S.MENU, { ...data, menuPage: Number(page[1]) });
-    if (replyId === 'cart:view') return go(r, S.CARRITO, data);
-    const id = replyId?.startsWith('item:') ? replyId.slice(5) : findItemByText(r, t)?.id;
-    if (id && r.menu.some(m => m.id === id)) return go(r, S.CANTIDAD, { ...data, pending: id });
+  [S.MENU](r, data, intent) {
+    if (intent.type === 'menu_page') return go(r, S.MENU, { ...data, menuPage: intent.page });
+    if (intent.type === 'view_cart') return go(r, S.CARRITO, data);
+    if (intent.type === 'select_item' && r.menu.some(m => m.id === intent.itemId)) {
+      return go(r, S.CANTIDAD, { ...data, pending: intent.itemId });
+    }
     return null;
   },
 
-  [S.CANTIDAD](r, data, { replyId, t }) {
-    const qty = replyId?.startsWith('qty:') ? Number(replyId.slice(4)) : parseQty(t);
-    if (!Number.isInteger(qty) || qty < 1) return null;
-    const cart = addToCart(data, data.pending, qty);
+  [S.CANTIDAD](r, data, intent) {
+    if (intent.type !== 'quantity' || !Number.isInteger(intent.qty) || intent.qty < 1) return null;
+    const cart = addToCart(data, data.pending, intent.qty);
     if (!cart) return go(r, S.CANTIDAD, data, [text(`Se pueden pedir hasta ${MAX_QTY} unidades por producto.`)]);
     const { pending, ...rest } = data;
     return go(r, S.CARRITO, { ...rest, cart });
   },
 
-  [S.CARRITO](r, data, { replyId, t }) {
-    if (replyId === 'cart:add' || t === 'agregar' || t === 'agregar mas') return go(r, S.MENU, { ...data, menuPage: 1 });
-    if (replyId === 'cart:checkout' || ['finalizar', 'listo', 'eso es todo', 'nada mas'].includes(t)) return go(r, S.ZONA, data);
-    if (replyId === 'cart:clear' || t === 'vaciar') return go(r, S.MENU, { ...data, cart: [], menuPage: 1 }, [text('🗑️ Vacié tu carrito.')]);
+  [S.CARRITO](r, data, intent) {
+    if (intent.type === 'add_more') return go(r, S.MENU, { ...data, menuPage: 1 });
+    if (intent.type === 'checkout') return go(r, S.ZONA, data);
+    if (intent.type === 'clear_cart') return go(r, S.MENU, { ...data, cart: [], menuPage: 1 }, [text('🗑️ Vacié tu carrito.')]);
     return null;
   },
 
-  [S.ZONA](r, data, { replyId, t }) {
-    if (replyId === 'pickup' || /\brecoger\b/.test(t)) {
-      return go(r, S.PAGO, { ...data, pickup: true, zoneId: null, address: null });
-    }
-    const zones = r.deliveryZones || [];
-    const zone = replyId?.startsWith('zone:')
-      ? zones.find(z => z.id === replyId.slice(5))
-      : zones.find(z => normalize(z.name) === t);
+  [S.ZONA](r, data, intent) {
+    if (intent.type === 'pickup') return go(r, S.PAGO, { ...data, pickup: true, zoneId: null, address: null });
+    const zone = intent.type === 'zone' && (r.deliveryZones || []).find(z => z.id === intent.zoneId);
     if (zone) return go(r, S.DIRECCION, { ...data, pickup: false, zoneId: zone.id });
     return null;
   },
 
-  [S.DIRECCION](r, data, { type, raw }) {
-    const address = type === 'text' ? raw.trim().replace(/\s+/g, ' ') : '';
+  [S.DIRECCION](r, data, intent) {
+    if (intent.type !== 'address') return null;
+    const address = String(intent.text ?? '').trim().replace(/\s+/g, ' ');
     if (address.length < 5 || address.length > 200) return null;
     return go(r, S.PAGO, { ...data, address });
   },
 
-  [S.PAGO](r, data, { replyId, t }) {
-    const i = replyId?.startsWith('pay:')
-      ? Number(replyId.slice(4))
-      : r.payments.findIndex(p => normalize(p) === t);
-    const payment = Number.isInteger(i) ? r.payments[i] : undefined;
+  [S.PAGO](r, data, intent) {
+    const payment = intent.type === 'payment' && Number.isInteger(intent.index) ? r.payments[intent.index] : undefined;
     if (!payment) return null;
     return go(r, S.CONFIRMACION, { ...data, payment });
   },
 
-  [S.CONFIRMACION](r, data, { replyId, t }) {
-    if (replyId === 'cart:edit' || t === 'modificar') return go(r, S.CARRITO, data);
-    if (replyId !== 'confirm' && !YES_WORDS.has(t)) return null;
+  [S.CONFIRMACION](r, data, intent) {
+    if (intent.type === 'edit') return go(r, S.CARRITO, data);
+    if (intent.type !== 'confirm') return null;
     const zone = (r.deliveryZones || []).find(z => z.id === data.zoneId);
     const order = {
       ...priceCart(r, data, true),
@@ -307,9 +255,12 @@ function miss(restaurant, state, data) {
  * @param {object} restaurant  configuración validada
  * @param {{state:string, data:object}|null} session
  * @param {{type:string, text?:string, replyId?:string, name?:string}} msg  mensaje de parseWebhook
+ * @param {{intent?:object|null}} [opts]  intención interpretada por la IA. Se valida con
+ *   validateIntent(..., {source: 'ia'}); si no cumple, cuenta como "no entendí". Si no llega,
+ *   se interpreta con las reglas de interpret.js (botones, audio y texto simple).
  * @returns {{state:string, data:object, replies:object[], order?:object, handoff?:{reason:string}}}
  */
-export function step(restaurant, session, msg) {
+export function step(restaurant, session, msg, { intent } = {}) {
   const known = Object.values(S).includes(session?.state);
   const state = known ? session.state : S.INICIO;
 
@@ -317,28 +268,30 @@ export function step(restaurant, session, msg) {
   if (state === S.HUMANO) return { state, data: structuredClone(session.data || {}), replies: [] };
 
   const data = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
-
-  const raw = msg.type === 'text' ? String(msg.text ?? '') : '';
-  const input = { type: msg.type, raw, t: normalize(raw), replyId: msg.type === 'interactive' ? msg.replyId : undefined };
+  // Una intención que llega de fuera no se aplica a ciegas: pasa por el contrato (BUG-013).
+  // Solo la IA le pasa intenciones a step (las reglas corren aquí dentro), así que se valida
+  // como salida de la IA: sin media ni menu_page, y una derivación queda con motivo 'ia'.
+  // Validar dos veces da lo mismo, así que bot.js puede validar antes sin conflicto.
+  const it = intent !== undefined
+    ? validateIntent(restaurant, intent, { source: 'ia' })
+    : interpret(restaurant, state, msg);
 
   // Intenciones globales, válidas en cualquier estado.
-  if (input.replyId === 'human') return handoff(restaurant, data, 'boton');
-  // En la dirección no se busca la frase: "preguntar por la persona de portería" es una referencia.
-  if (state !== S.DIRECCION && HUMAN_RE.test(input.t)) return handoff(restaurant, data, 'frase');
-  if (input.replyId === 'cancel' || CANCEL_WORDS.has(input.t)) {
+  if (it?.type === 'human') return handoff(restaurant, data, it.via);
+  if (it?.type === 'cancel') {
     return { state: S.INICIO, data: {}, replies: [text('Listo, cancelé el pedido. Escríbeme cuando quieras empezar de nuevo.')] };
   }
-  if (msg.type === 'audio' || msg.type === 'unsupported') {
-    const why = msg.type === 'audio' ? 'Por ahora no puedo escuchar notas de voz.' : 'Por ahora solo entiendo texto y botones.';
+  if (it?.type === 'media') {
+    const why = it.kind === 'audio' ? 'Por ahora no puedo escuchar notas de voz.' : 'Por ahora solo entiendo texto y botones.';
     const note = text(`${why} Escríbeme o usa las opciones, por favor.`);
     if (state === S.INICIO) return { state: S.SALUDO, data: { cart: [] }, replies: [note, ...greeting(restaurant, msg.name)] };
     return go(restaurant, state, data, [note]);
   }
-  if (MENU_WORDS.has(input.t)) return go(restaurant, S.MENU, { ...data, menuPage: 1 });
+  if (it?.type === 'menu') return go(restaurant, S.MENU, { ...data, menuPage: 1 });
 
   if (state === S.INICIO) return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
 
   // Si la sesión quedó incoherente (p. ej. cambió el menú), se reubica antes de interpretar.
   if (guard(state, data) !== state) return go(restaurant, state, data);
-  return handlers[state](restaurant, data, input) || miss(restaurant, state, data);
+  return (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data);
 }

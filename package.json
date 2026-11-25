@@ -10,6 +10,7 @@
     "dev": "node --watch src/server.js",
     "test": "node --test",
     "simular": "node scripts/simular.js",
-    "derivaciones": "node scripts/derivaciones.js"
+    "derivaciones": "node scripts/derivaciones.js",
+    "evaluar": "node scripts/evaluar.js"
   }
 }
