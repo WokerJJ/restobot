@@ -19,8 +19,9 @@ Cada fase termina con pruebas en verde y algo que se puede demostrar.
 ## Fase 3 — IA para texto libre
 - Interpretación de pedidos y modificaciones ("sin salsa de piña") con tool calling.
 - ✅ Separar la interpretación del texto de las transiciones de `flow.js` (`interpret.js`), con un contrato de intenciones validado (`intents.js`).
-- ✅ Conjunto de evaluación (`eval/`, `npm run evaluar`) con métrica de acciones irreversibles indebidas. Línea base de las reglas: 35/70 (50 %), 0 indebidas.
-- ✅ Líneas del carrito con extras y notas (EVA-002): identidad por producto + extras + nota, tope de 50 por producto sumando sus líneas, extras permitidos por producto (`menu[].extras`), `add_items` (también desde el primer mensaje) y `remove_item`.
+- ✅ Conjunto de evaluación (`eval/`, `npm run evaluar`) con métrica de acciones irreversibles indebidas. Línea base de las reglas: 35/72 (49 %), 0 indebidas.
+- ✅ Líneas del carrito con extras y notas (EVA-002): identidad por producto + extras + nota, tope de 50 por producto sumando sus líneas, extras permitidos por producto (`menu[].extras`), `add_items` (también desde el primer mensaje, con avisos para lo que no está en la carta) y `remove_item` (por producto o por línea exacta).
+- Cambiar una línea del carrito ("quítale la tocineta", "mejor que sean dos"): necesita una intención compuesta.
 - Intérprete con un modelo por API, validado con `validateIntent` y medido contra la línea base.
 - Preguntas frecuentes desde la configuración del restaurante (intención `question`).
 - Evaluación con chats reales anonimizados (Ley 1581), además de los casos inventados.
