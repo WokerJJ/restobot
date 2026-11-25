@@ -27,6 +27,7 @@ Asistente de WhatsApp para restaurantes que usa la Cloud API oficial de Meta: to
 - Cuándo se llama a la IA: los botones, el audio y los saludos van siempre por las reglas; la IA solo recibe **texto**, solo si las reglas devuelven null, y nunca en el paso de la dirección ni mientras el chat está derivado a una persona.
 - Las acciones irreversibles que decide la IA (confirmar, cancelar, vaciar el carrito, derivar) piden el toque de un botón. La IA tiene topes de gasto: 10 llamadas por cliente cada 10 minutos y `AI_DAILY_LIMIT` por día. La dirección nunca se envía a la IA.
 - Cada producto declara los extras que admite en `menu[].extras` (sin la lista, ninguno) y sus sinónimos en `menu[].aliases`. Toda línea de `add_items` se valida por separado; las rechazadas se avisan, no se descartan en silencio.
+- Las preguntas frecuentes (horario, zonas, pagos, tiempo) se responden con datos de la configuración, nunca con texto del modelo; si falta el dato, se ofrece una persona.
 - Un cambio en la interpretación se mide con `npm run evaluar` contra la línea base (los intérpretes de IA, con `{source: 'ia'}`). La métrica de acciones irreversibles indebidas tiene umbral 0.
 - Toda respuesta nueva del bot debe pasar `test/contract.test.js`, que valida los límites de la Cloud API: 3 botones, 10 filas, 1024 caracteres por cuerpo.
 - **Esquema:** los cambios van como una migración nueva al final de `MIGRATIONS` en `src/store.js`. Nunca se edita una migración existente.
