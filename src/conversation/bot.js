@@ -19,6 +19,12 @@ export const HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
 // este tope, un cliente que escribe una vez al día dejaría al bot callado para siempre.
 export const HANDOFF_MAX_MS = 72 * 60 * 60 * 1000;
 
+// Topes de gasto de la IA (BUG-023): cualquier número puede escribirle al local, y cada texto
+// que las reglas no entienden es una llamada pagada. Al pasarlos, el bot sigue solo con reglas.
+export const AI_LIMIT_PER_CUSTOMER = 10;
+export const AI_WINDOW_MS = 10 * 60 * 1000;
+export const AI_DAILY_LIMIT = 2000;
+
 // Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
 const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -39,12 +45,49 @@ export function releaseHandoff(store, customer, now = Date.now()) {
  *                             ttlHours:number, expiresAt:number}) => Promise<boolean>}} deps
  *   notifyHandoff: aviso al local cuando un cliente pide una persona (ver src/notify.js).
  *   interpretAI: intérprete de texto libre (ver src/ai/claude.js); sin él, solo reglas.
+ *   aiLimitPerCustomer / aiWindowMs: llamadas a la IA por cliente en una ventana móvil.
+ *   aiDailyLimit: llamadas a la IA por día del calendario en timeZone (la del restaurante).
  */
 export function createBot({
   restaurant, store, client, log = console, now = Date.now,
   sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, handoffMaxMs = HANDOFF_MAX_MS,
-  notifyHandoff = async () => false, interpretAI = null
+  notifyHandoff = async () => false, interpretAI = null,
+  aiLimitPerCustomer = AI_LIMIT_PER_CUSTOMER, aiWindowMs = AI_WINDOW_MS, aiDailyLimit = AI_DAILY_LIMIT,
+  timeZone = restaurant.timezone || 'America/Bogota'
 }) {
+  // Las cuentas de la IA viven en memoria: con varios procesos, cada uno lleva la suya (el tope
+  // real es el configurado por el número de procesos), y un reinicio las pone en cero.
+  const aiCalls = new Map(); // cliente → { times: [ms de cada llamada en la ventana], warned }
+  const daily = { day: null, count: 0, warned: false };
+  const dayOf = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+
+  // Dice si se puede llamar a la IA y, si sí, cuenta la llamada. Avisa en el log una vez por
+  // ventana (por cliente) o por día (global), con el teléfono enmascarado.
+  function allowAI(customer, t) {
+    // Se limpian las entradas vencidas en cada consulta: el Map solo guarda clientes activos.
+    for (const [key, e] of aiCalls) {
+      e.times = e.times.filter(x => t - x < aiWindowMs);
+      if (!e.times.length) aiCalls.delete(key);
+    }
+    const entry = aiCalls.get(customer) ?? { times: [], warned: false };
+    if (entry.times.length >= aiLimitPerCustomer) {
+      if (!entry.warned) log.warn?.(`límite de IA por cliente alcanzado (${maskPhone(customer)}): sigue solo con reglas`);
+      entry.warned = true;
+      return false;
+    }
+    const day = dayOf.format(t);
+    if (daily.day !== day) Object.assign(daily, { day, count: 0, warned: false });
+    if (daily.count >= aiDailyLimit) {
+      if (!daily.warned) log.warn?.(`tope diario de IA alcanzado (${aiDailyLimit} llamadas): el bot sigue solo con reglas hasta mañana`);
+      daily.warned = true;
+      return false;
+    }
+    entry.times.push(t);
+    aiCalls.set(customer, entry);
+    daily.count++;
+    return true;
+  }
+
   // Cola por cliente: los mensajes de una misma persona se procesan en orden, uno a la vez.
   // Hoy evita que las respuestas de dos toques seguidos se intercalen en el chat; cuando
   // step() sea asíncrono (IA, fase 3) evitará además que dos mensajes lean la misma sesión.
@@ -110,7 +153,8 @@ export function createBot({
     if (interpretAI && msg.type === 'text') {
       const state = Object.values(STATES).includes(session?.state) ? session.state : STATES.INICIO;
       const greeting = (state === STATES.INICIO || state === STATES.SALUDO) && isGreeting(msg.text);
-      if (state !== STATES.HUMANO && state !== STATES.DIRECCION && !greeting && interpret(restaurant, state, msg) === null) {
+      if (state !== STATES.HUMANO && state !== STATES.DIRECCION && !greeting && interpret(restaurant, state, msg) === null &&
+        allowAI(msg.from, t)) {
         try {
           intent = (await interpretAI(restaurant, state, msg, { data: session?.data || {} })) ?? null;
         } catch (err) {

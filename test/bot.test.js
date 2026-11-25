@@ -28,7 +28,8 @@ function setup(opts = {}) {
   let clock = opts.start ?? 1_000_000;
   const bot = createBot({
     restaurant, store, client, log, now: () => clock, notifyHandoff: opts.notifyHandoff,
-    handoffTtlMs: opts.handoffTtlMs, handoffMaxMs: opts.handoffMaxMs, interpretAI: opts.interpretAI
+    handoffTtlMs: opts.handoffTtlMs, handoffMaxMs: opts.handoffMaxMs, interpretAI: opts.interpretAI,
+    aiLimitPerCustomer: opts.aiLimitPerCustomer, aiWindowMs: opts.aiWindowMs, aiDailyLimit: opts.aiDailyLimit
   });
   let seq = 0;
   const msg = (extra) => ({ id: `wamid.in.${++seq}`, from: CLIENTE, name: 'Ana', ...extra });
@@ -494,4 +495,34 @@ test('un saludo en el inicio o en el saludo no llama a la IA; un saludo con pedi
   await say('hola, me das 2 perros');
   assert.equal(ai.calls.length, 1);
   assert.deepEqual(store.getSession(CLIENTE).data.cart, [{ itemId: 'perro', qty: 2 }]);
+});
+
+test('un cliente no pasa de 10 llamadas a la IA en 10 minutos; luego sigue con reglas (BUG-023)', async () => {
+  const ai = fakeAI();
+  const { client, logs, say, tap, tick } = setup({ interpretAI: ai });
+  await tap('menu');
+  await tap('menu');
+  for (let i = 0; i < 12; i++) await say('quiero algo rico');
+  assert.equal(ai.calls.length, 10, 'la llamada 11 ya no llega a la IA');
+  assert.ok(client.sent.slice(-3).some(s => /No te entendí/.test(s.body)), 'responde con las reglas');
+  const avisos = logs.filter(l => /límite de IA/.test(l));
+  assert.equal(avisos.length, 1, 'un aviso por ventana');
+  assert.ok(!avisos[0].includes(CLIENTE));
+  tick(10 * 60 * 1000 + 1);
+  await say('quiero algo rico');
+  assert.equal(ai.calls.length, 11, 'pasada la ventana vuelve a llegar');
+});
+
+test('el tope diario global corta la IA para todos y se reinicia al día siguiente (BUG-023)', async () => {
+  const ai = fakeAI();
+  const { logs, bot, msg, tick } = setup({ interpretAI: ai, aiDailyLimit: 3 });
+  const de = (n, text = 'quiero algo rico') => bot.onMessage(msg({ type: 'text', text, from: `5730000000${n}` }));
+  for (const n of [1, 2, 3, 4, 5]) await de(n);
+  assert.equal(ai.calls.length, 3, 'el cuarto cliente no llama');
+  const avisos = logs.filter(l => /tope diario de IA/.test(l));
+  assert.equal(avisos.length, 1);
+  assert.ok(avisos.every(l => !/57300000/.test(l)), 'el aviso no lleva teléfonos');
+  tick(24 * 60 * 60 * 1000);
+  await de(6);
+  assert.equal(ai.calls.length, 4, 'al día siguiente vuelve a llamar');
 });

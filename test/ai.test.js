@@ -40,6 +40,7 @@ test('la solicitud usa la API documentada, salida estructurada y caché de instr
   assert.equal(c.body.output_config.effort, 'low');
   assert.equal(c.body.output_config.format.type, 'json_schema');
   assert.deepEqual(c.body.system[0].cache_control, { type: 'ephemeral' });
+  assert.equal(c.body.max_tokens, 1024, 'la salida es un JSON corto (BUG-023)');
   assert.equal(c.body.thinking, undefined, 'Opus 5.5 piensa siempre: no se envía thinking');
   assert.match(c.body.messages[0].content, /Paso actual: menu/);
   assert.match(c.body.messages[0].content, /Carrito: 1 × gaseosa/);

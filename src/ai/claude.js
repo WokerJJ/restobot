@@ -170,7 +170,10 @@ export function createClaudeInterpreter({
 
     const body = {
       model,
-      max_tokens: 4096,
+      // La salida es un JSON corto. El pensamiento de Opus también cuenta para este tope: si se
+      // queda corto, la respuesta llega cortada (stop_reason max_tokens) y cuenta como "no
+      // entendí". Cualquier cambio se mide con `npm run evaluar -- claude`.
+      max_tokens: 1024,
       // Instrucciones estables primero y en caché: solo cambia el mensaje del usuario.
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: buildUserContent(restaurant, state, data, String(msg.text ?? '')) }],

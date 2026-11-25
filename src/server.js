@@ -101,7 +101,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     url: env.handoffWebhookUrl, restaurantName: restaurant.name, timeZone: restaurant.timezone
   });
   if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
-  const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff, interpretAI: createInterpreter(env) });
+  const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff, interpretAI: createInterpreter(env), aiDailyLimit: env.aiDailyLimit });
   createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
 }

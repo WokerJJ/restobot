@@ -13,9 +13,17 @@ export function loadEnv(env = process.env) {
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
     aiModel: env.AI_MODEL || 'claude-opus-5-5',
     aiEffort: env.AI_EFFORT || 'low',
+    aiDailyLimit: dailyLimit(env.AI_DAILY_LIMIT),
     dbPath: env.DB_PATH || 'data/restobot.db',
     restaurantPath: env.RESTAURANT_CONFIG || 'config/restaurant.json'
   };
+}
+
+// Un valor inválido no puede quitar el tope en silencio (NaN nunca se alcanza): se rechaza.
+function dailyLimit(value) {
+  const n = Number(value || 2000);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`AI_DAILY_LIMIT debe ser un entero mayor o igual a 0: ${value}`);
+  return n;
 }
 
 export function loadRestaurant(path) {
