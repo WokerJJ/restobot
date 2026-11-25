@@ -14,6 +14,7 @@ import { STATES } from '../conversation/states.js';
 export const API_URL = 'https://api.anthropic.com/v1/messages';
 export const API_VERSION = '2026-10-21';
 export const DEFAULT_MODEL = 'claude-opus-5-5';
+export const AI_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const UNKNOWN_ITEM = 'desconocido';
 // Mientras la IA responde, los mensajes siguientes del mismo cliente esperan en su cola (bot.js):
 // pasado este plazo se sigue como si no hubiera entendido.
@@ -207,7 +208,9 @@ export function createClaudeInterpreter({
     });
     const json = await res.json().catch(() => ({}));
     // El mensaje de error nunca incluye la clave: solo el estado y el tipo de error de la API.
-    if (!res.ok) throw new Error(`API de Claude respondió ${res.status}: ${json?.error?.type || 'error'}`);
+    // El status viaja en el error para que bot.js distinga una configuración inválida (400, 401,
+    // 403) de una falla pasajera (429, 5xx).
+    if (!res.ok) throw Object.assign(new Error(`API de Claude respondió ${res.status}: ${json?.error?.type || 'error'}`), { status: res.status });
     onUsage?.(json.usage);
 
     // Un rechazo o una respuesta cortada no se interpreta: cuenta como "no entendí".

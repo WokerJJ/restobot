@@ -25,6 +25,9 @@ export const AI_LIMIT_PER_CUSTOMER = 10;
 export const AI_WINDOW_MS = 10 * 60 * 1000;
 export const AI_DAILY_LIMIT = 2000;
 
+// Respuestas de la API de la IA que indican una configuración inválida, no una falla pasajera.
+const CONFIG_ERRORS = [400, 401, 403];
+
 // Plazo para avisar de un pedido guardado cuya confirmación no llegó al cliente.
 const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -60,6 +63,7 @@ export function createBot({
   const aiCalls = new Map(); // cliente → { times: [ms de cada llamada en la ventana], warned }
   const daily = { day: null, count: 0, warned: false };
   const dayOf = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  let aiConfigReported = false; // un bot por proceso: el error de configuración sale una vez
 
   // Dice si se puede llamar a la IA y, si sí, cuenta la llamada. Avisa en el log una vez por
   // ventana (por cliente) o por día (global), con el teléfono enmascarado.
@@ -158,7 +162,14 @@ export function createBot({
         try {
           intent = (await interpretAI(restaurant, state, msg, { data: session?.data || {} })) ?? null;
         } catch (err) {
-          log.warn?.(`la IA no respondió (${maskPhone(msg.from)}): ${err.message}`);
+          // 400, 401 o 403 no se arreglan solos (clave revocada, modelo o esfuerzo inválido): se
+          // registra como error una sola vez, para que se vea sin llenar el log con cada mensaje.
+          if (CONFIG_ERRORS.includes(err.status)) {
+            if (!aiConfigReported) log.error?.(`configuración de la IA inválida (${err.message}): revisa ANTHROPIC_API_KEY, AI_MODEL y AI_EFFORT. El bot sigue solo con reglas.`);
+            aiConfigReported = true;
+          } else {
+            log.warn?.(`la IA no respondió (${maskPhone(msg.from)}): ${err.message}`);
+          }
         }
       }
     }

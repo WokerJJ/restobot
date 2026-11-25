@@ -152,6 +152,9 @@ test('un error de la API lanza sin exponer la clave', async () => {
   const err = await interp(fakeFetch({ status: 529, raw: { error: { type: 'overloaded_error', message: 'clave CLAVE' } } }))(r, 'menu', msg('x')).catch(e => e);
   assert.match(err.message, /529: overloaded_error/);
   assert.doesNotMatch(err.message, /CLAVE/);
+  assert.equal(err.status, 529, 'el status viaja en el error (EVA-030)');
+  const auth = await interp(fakeFetch({ status: 401, raw: { error: { type: 'authentication_error' } } }))(r, 'menu', msg('x')).catch(e => e);
+  assert.equal(auth.status, 401);
   assert.throws(() => createClaudeInterpreter({ apiKey: '' }), /ANTHROPIC_API_KEY/);
 });
 

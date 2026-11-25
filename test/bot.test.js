@@ -423,6 +423,25 @@ test('si la IA falla, el cliente recibe "no entendí" y el log no expone el tel�
   assert.ok(aviso && !aviso.includes(CLIENTE));
 });
 
+test('un 401 de la IA se registra una vez como configuración inválida; un 529 sigue como aviso (EVA-030)', async () => {
+  const fallo = status => Object.assign(new Error(`API de Claude respondió ${status}: error`), { status });
+  const ai = fakeAI({ 'quiero algo rico': fallo(401), 'algo más': fallo(401), 'otra cosa': fallo(529) });
+  const errores = [];
+  const avisos = [];
+  const bot = createBot({
+    restaurant, store: openStore(':memory:'), client: fakeClient(), interpretAI: ai, now: () => 1_000_000,
+    log: { info: () => {}, warn: m => avisos.push(m), error: m => errores.push(m) }
+  });
+  const say = text => bot.onMessage({ id: `wamid.${text}`, from: CLIENTE, type: 'text', text });
+  await say('quiero algo rico');
+  await say('algo más');
+  await say('otra cosa');
+  assert.equal(errores.length, 1, 'una sola vez por proceso');
+  assert.match(errores[0], /configuración de la IA inválida.*401/);
+  assert.ok(!errores[0].includes(CLIENTE));
+  assert.equal(avisos.filter(l => /529/.test(l)).length, 1, 'un 529 sigue como aviso');
+});
+
 test('una derivación que entiende la IA ofrece el botón; solo el toque deriva y avisa al local (BUG-024)', async () => {
   const avisos = [];
   const ai = fakeAI({ 'me comunican con alguien de verdad?': { type: 'human', via: 'boton' } });
