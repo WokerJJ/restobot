@@ -586,3 +586,38 @@ describe('líneas rechazadas de add_items (EVA-022)', () => {
     assert.equal(res.replies[1].body, 'No tenemos «pizza» en la carta.');
   });
 });
+
+describe('remove_item por línea (EVA-021)', () => {
+  const cart = [{ itemId: 'perro', qty: 2, note: 'sin cebolla' }, { itemId: 'perro', qty: 1, extras: ['queso'] }, { itemId: 'perro', qty: 1 }];
+  const rm = (intent, state = S.CARRITO) => step(r, ses(state, { cart }), txt('x'), { intent: { type: 'remove_item', itemId: 'perro', ...intent } });
+
+  test('quitar la línea con nota deja las demás', () => {
+    const res = rm({ note: 'Sin cebolla' });
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 1, extras: ['queso'] }, { itemId: 'perro', qty: 1 }]);
+    assert.equal(res.replies[0].body, 'Listo, quité 2 × Perro sencillo (sin cebolla).');
+    const uno = rm({ note: 'sin cebolla', qty: 1 });
+    assert.deepEqual(uno.data.cart[0], { itemId: 'perro', qty: 1, note: 'sin cebolla' });
+  });
+
+  test('extras y la línea sin extras ni nota se nombran también', () => {
+    const queso = rm({ extras: ['queso'] });
+    assert.deepEqual(queso.data.cart, [{ itemId: 'perro', qty: 2, note: 'sin cebolla' }, { itemId: 'perro', qty: 1 }]);
+    assert.equal(queso.replies[0].body, 'Listo, quité 1 × Perro sencillo + Queso extra.');
+    const sola = rm({ exact: true });
+    assert.deepEqual(sola.data.cart, [{ itemId: 'perro', qty: 2, note: 'sin cebolla' }, { itemId: 'perro', qty: 1, extras: ['queso'] }]);
+  });
+
+  test('una línea que no existe se avisa y no cambia el carrito', () => {
+    const res = rm({ note: 'sin cebolla', extras: ['tocineta'] }, S.MENU);
+    assert.equal(res.state, S.MENU);
+    assert.deepEqual(res.data.cart, cart);
+    assert.equal(res.replies[0].body, 'No encontré Perro sencillo + Tocineta (sin cebolla) en tu pedido.');
+  });
+
+  test('sin extras ni nota se comporta igual que antes', () => {
+    const res = rm({ qty: 3 });
+    assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 1, note: 'sin cebolla' }]);
+    assert.equal(res.replies[0].body, 'Listo, quité 3 × Perro sencillo.');
+  });
+});

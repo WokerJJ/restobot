@@ -140,3 +140,24 @@ test('remove_item: producto del menú y cantidad opcional', () => {
   assert.equal(v({ type: 'remove_item', itemId: 'perro', qty: 0 }), null);
   assert.deepEqual(validateIntent(r, { type: 'remove_item', itemId: 'perro' }, { source: 'ia' }), { type: 'remove_item', itemId: 'perro' });
 });
+
+test('remove_item puede nombrar una línea por sus extras y su nota (EVA-021)', () => {
+  assert.deepEqual(v({ type: 'remove_item', itemId: 'perro', extras: ['tocineta', 'queso'], note: ' sin  cebolla ' }),
+    { type: 'remove_item', itemId: 'perro', exact: true, extras: ['queso', 'tocineta'], note: 'sin cebolla' });
+  assert.deepEqual(v({ type: 'remove_item', itemId: 'perro', qty: 1, exact: true }),
+    { type: 'remove_item', itemId: 'perro', qty: 1, exact: true }, 'la línea sin extras ni nota se nombra con exact');
+  assert.deepEqual(v({ type: 'remove_item', itemId: 'perro', extras: [], note: '', exact: false }),
+    { type: 'remove_item', itemId: 'perro' }, 'vacíos y exact false no seleccionan línea');
+  const una = v({ type: 'remove_item', itemId: 'perro', note: 'sin cebolla' });
+  assert.deepEqual(v(una), una, 'validar dos veces da lo mismo');
+  for (const bad of [
+    { type: 'remove_item', itemId: 'gaseosa', extras: ['queso'] },
+    { type: 'remove_item', itemId: 'perro', extras: ['caviar'] },
+    { type: 'remove_item', itemId: 'perro', extras: 'queso' },
+    { type: 'remove_item', itemId: 'perro', note: 'x'.repeat(141) },
+    { type: 'remove_item', itemId: 'perro', note: 5 },
+    { type: 'remove_item', itemId: 'perro', exact: 'si' }
+  ]) {
+    assert.equal(v(bad), null, JSON.stringify(bad));
+  }
+});

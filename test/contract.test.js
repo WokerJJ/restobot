@@ -115,7 +115,9 @@ test('todas las respuestas del flujo respetan los límites de la Cloud API', () 
           { itemId: m.id, qty: 0 }, { itemId: m.id, qty: 1, extras: ['no-existe'], mention: largo('caviar', 300) },
           { itemId: m.id, qty: 1, note: largo('nota', 141) }] })),
         { type: 'remove_item', itemId: m.id, qty: 1 },
-        { type: 'remove_item', itemId: r.menu[0].id }
+        { type: 'remove_item', itemId: r.menu[0].id },
+        { type: 'remove_item', itemId: m.id, extras: m.extras, note: largo('bien tostado por favor', 140) },
+        { type: 'remove_item', itemId: m.id, exact: true }
       ]) {
         const res = step(r, sesion, { ...txt('x') }, { intent });
         revisar(`${nombre} · ${state} ← ${intent.type}`, res.replies);

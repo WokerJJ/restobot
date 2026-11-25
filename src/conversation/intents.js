@@ -32,7 +32,15 @@
 //        con items: [], porque "no tenemos «pizza»" es mejor respuesta que "no te entendí".
 //        rejected se omite si está vacío, y se acepta de entrada para que validar dos veces dé
 //        lo mismo.
-//   { type: 'remove_item', itemId, qty? }         sin qty quita todas las unidades del producto
+//   { type: 'remove_item', itemId, qty?, exact?: true, extras?, note? }
+//        sin qty quita todas las unidades. Sin exact, extras ni nota quita del producto, sin
+//        importar la línea. Con extras o nota (validados como en cleanLine) o con exact: true,
+//        quita solo de la línea que coincide exactamente (lineKey de flow.js): lo que no venga
+//        cuenta como vacío. Así exact: true sin más nombra la línea "sin extras y sin nota" (EVA-021).
+//        Se eligió exact en vez de extras: [] con note: '' porque la normalización descarta los
+//        vacíos (como en cleanLine) y un modelo suele mandar note: '' sin querer decir nada.
+//        La salida siempre lleva exact: true cuando nombra una línea.
+//        Pendiente: cambiar una línea ("quítale la tocineta") necesita una intención compuesta.
 // Reservada para la IA; flow.js todavía no la aplica (la trata como "no entendí"):
 //   { type: 'question', topic: 'horario' | 'zonas' | 'pagos' | 'tiempo' | 'otro' }
 //
@@ -178,8 +186,14 @@ export function validateIntent(restaurant, intent, { source } = {}) {
     }
     case 'remove_item': {
       if (!restaurant.menu.some(m => m.id === intent.itemId)) return null;
-      if (intent.qty === undefined) return { type, itemId: intent.itemId };
-      return isInt(intent.qty, 1, MAX_QTY_UNDERSTOOD) ? { type, itemId: intent.itemId, qty: intent.qty } : null;
+      if (intent.qty !== undefined && !isInt(intent.qty, 1, MAX_QTY_UNDERSTOOD)) return null;
+      if (intent.exact !== undefined && typeof intent.exact !== 'boolean') return null;
+      // extras y nota se validan como en una línea del carrito (la cantidad no importa aquí).
+      const { line } = checkLine(restaurant, { itemId: intent.itemId, qty: 1, extras: intent.extras, note: intent.note });
+      if (!line) return null;
+      const out = { type, itemId: intent.itemId, ...(intent.qty !== undefined ? { qty: intent.qty } : {}) };
+      if (!intent.exact && !line.extras && !line.note) return out;
+      return { ...out, exact: true, ...(line.extras ? { extras: line.extras } : {}), ...(line.note ? { note: line.note } : {}) };
     }
     default:
       // Sin campos: cancel, menu, start_order, view_cart, add_more, checkout, clear_cart,

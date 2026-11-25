@@ -256,18 +256,26 @@ function addLines(restaurant, cart, items) {
   return { cart: next };
 }
 
-// Quita unidades de un producto empezando por lo último que se agregó; sin qty, todas.
-function removeFromCart(cart, itemId, qty = Infinity) {
+// Quita unidades de las líneas que cumplen match, empezando por lo último que se agregó; sin
+// qty, todas.
+function removeFromCart(cart, match, qty = Infinity) {
   let left = qty;
   const next = [];
   for (const l of [...cart].reverse()) {
-    if (l.itemId !== itemId || left <= 0) { next.unshift(l); continue; }
+    if (!match(l) || left <= 0) { next.unshift(l); continue; }
     const take = Math.min(l.qty, left);
     left -= take;
     if (l.qty > take) next.unshift({ ...l, qty: l.qty - take });
   }
-  const units = c => c.filter(l => l.itemId === itemId).reduce((n, l) => n + l.qty, 0);
+  const units = c => c.filter(match).reduce((n, l) => n + l.qty, 0);
   return { cart: next, removed: units(cart) - units(next) };
+}
+
+// "Perro sencillo + Queso extra (sin cebolla)", con los nombres de la configuración.
+function lineLabel(r, l) {
+  const extraName = id => (r.extras || []).find(e => e.id === id)?.name ?? id;
+  const extras = (l.extras || []).length ? ' + ' + l.extras.map(extraName).join(', ') : '';
+  return `${itemName(r, l.itemId)}${extras}${l.note ? ` (${l.note})` : ''}`;
 }
 
 // Un aviso por cada línea que el contrato rechazó (EVA-022), todos en un mensaje. mention ya
@@ -305,12 +313,18 @@ function applyAddItems(r, state, data, items, rejected) {
   return go(r, S.CARRITO, { ...rest, cart: res.cart }, notices);
 }
 
+// Sin exact quita del producto, sin importar la línea; con exact (EVA-021), solo de la línea
+// con los mismos extras y nota. Si no hay qué quitar, se avisa sin tocar el carrito.
 function applyRemoveItem(r, state, data, intent) {
-  const name = itemName(r, intent.itemId);
-  if (!(data.cart || []).some(l => l.itemId === intent.itemId)) {
-    return go(r, state, data, [text(`No tienes ${name} en el pedido.`)]);
+  const match = intent.exact ? l => lineKey(l) === lineKey(intent) : l => l.itemId === intent.itemId;
+  const found = (data.cart || []).find(match);
+  // Con exact, la línea se nombra como está en el carrito (lo que el cliente vio).
+  const name = intent.exact ? lineLabel(r, found ?? intent) : itemName(r, intent.itemId);
+  if (!found) {
+    const msg = intent.exact ? `No encontré ${name} en tu pedido.` : `No tienes ${name} en el pedido.`;
+    return go(r, state, data, [text(msg)]);
   }
-  const { cart, removed } = removeFromCart(data.cart, intent.itemId, intent.qty);
+  const { cart, removed } = removeFromCart(data.cart, match, intent.qty);
   // Si el carrito queda vacío, guard() lo lleva al menú.
   return go(r, S.CARRITO, { ...data, cart }, [text(`Listo, quité ${removed} × ${name}.`)]);
 }
