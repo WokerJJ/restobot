@@ -3,6 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { validateRestaurant } from '../src/config.js';
 import { loadCases, checkCase, matches, evaluate, IRREVERSIBLE } from '../eval/grade.js';
 import { interpret } from '../src/conversation/interpret.js';
@@ -206,4 +208,31 @@ test('el costo máximo no queda por debajo del peor caso con un prompt denso (EV
     const worst = estimateCost(usage, PRICES[model]).worstCaseUsd;
     assert.ok(max >= worst, `${model}: techo US$${max} < peor caso US$${worst}`);
   }
+});
+
+test('candado de gasto: sin --confirmar el plan no se confirma y muestra el techo (EVA-036)', async () => {
+  const { planClaudeRun } = await import('../eval/plan.js');
+  const env = { aiModel: 'claude-opus-5-5', aiEffort: 'low' };
+  const plan = planClaudeRun({ args: ['claude'], env, restaurant: r, cases });
+  assert.equal(plan.confirmed, false);
+  assert.equal(plan.model, 'claude-opus-5-5');
+  assert.equal(plan.effort, 'low');
+  assert.equal(plan.calls, cases.length);
+  assert.ok(plan.maxUsd > 0);
+
+  const confirmed = planClaudeRun({ args: ['claude', '--modelo', 'claude-haiku-5-5', '--esfuerzo', 'medium', '--confirmar'], env, restaurant: r, cases });
+  assert.equal(confirmed.confirmed, true);
+  assert.equal(confirmed.model, 'claude-haiku-5-5');
+  assert.equal(confirmed.effort, 'medium');
+  assert.equal(planClaudeRun({ args: ['claude', '--modelo', 'claude-x'], env, restaurant: r, cases }).maxUsd, null, 'sin precio no inventa un número');
+});
+
+test('candado de gasto: el script sin --confirmar termina sin clave y sin llamar a la API (EVA-036)', () => {
+  // Con la clave vacía, si el candado no detuviera la corrida el script saldría con código 1
+  // ("Falta ANTHROPIC_API_KEY") antes de crear el intérprete: nunca llega a la red.
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const env = { ...process.env, ANTHROPIC_API_KEY: '', AI_MODEL: '', AI_EFFORT: '' };
+  const run = spawnSync(process.execPath, ['scripts/evaluar.js', 'claude'], { cwd: root, env, encoding: 'utf8', timeout: 20_000 });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Costo máximo/);
 });
