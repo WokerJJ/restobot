@@ -26,13 +26,21 @@ export function validateRestaurant(r) {
   const ids = new Set();
   if (!r.name) throw new Error('restaurant.name es obligatorio');
   if (!Array.isArray(r.menu) || !r.menu.length) throw new Error('restaurant.menu no puede estar vacío');
+  const extraIds = new Set();
+  for (const e of r.extras || []) {
+    if (!e.id || extraIds.has(e.id)) throw new Error(`id de extra repetido o vacío: ${e.id}`);
+    extraIds.add(e.id);
+    if (!Number.isInteger(e.price) || e.price < 0) throw new Error(`precio de extra inválido: ${e.id}`);
+  }
   for (const it of r.menu) {
     if (!it.id || ids.has(it.id)) throw new Error(`id de menú repetido o vacío: ${it.id}`);
     ids.add(it.id);
     if (!Number.isInteger(it.price) || it.price < 0) throw new Error(`precio inválido (use pesos enteros): ${it.id}`);
-  }
-  for (const e of r.extras || []) {
-    if (!Number.isInteger(e.price) || e.price < 0) throw new Error(`precio de extra inválido: ${e.id}`);
+    // Cada producto declara qué extras admite; sin lista, no admite ninguno (una gaseosa con
+    // queso no debe poder cobrarse por error).
+    if (it.extras !== undefined && (!Array.isArray(it.extras) || !it.extras.every(id => extraIds.has(id)))) {
+      throw new Error(`extras inválidos para ${it.id}: deben ser ids de restaurant.extras`);
+    }
   }
   // Las zonas y los pagos se muestran en listas de WhatsApp (máximo 10 filas).
   if ((r.deliveryZones || []).length > 9) throw new Error('máximo 9 zonas de domicilio (la lista agrega "Recoger en el local")');

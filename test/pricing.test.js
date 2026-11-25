@@ -50,3 +50,14 @@ test('valida zonas de domicilio y medios de pago', () => {
   assert.throws(() => validateRestaurant({ ...base, deliveryZones: [{ id: 'z', name: 'Z', fee: 1 }, { id: 'z', name: 'Y', fee: 1 }] }), /zona/);
   assert.throws(() => validateRestaurant({ ...base, payments: [] }), /pago/);
 });
+
+test('cada producto declara qué extras admite, y deben existir', () => {
+  const base = { name: 'x', payments: ['Efectivo'], extras: [{ id: 'queso', name: 'Queso', price: 2000 }] };
+  assert.doesNotThrow(() => validateRestaurant({ ...base, menu: [{ id: 'a', price: 1000, extras: ['queso'] }, { id: 'b', price: 1000 }] }));
+  assert.throws(() => validateRestaurant({ ...base, menu: [{ id: 'a', price: 1000, extras: ['caviar'] }] }), /extra/);
+  assert.throws(() => validateRestaurant({ ...base, menu: [{ id: 'a', price: 1000, extras: 'queso' }] }), /extra/);
+  assert.throws(() => validateRestaurant({ ...base, extras: [{ id: 'queso', price: 1 }, { id: 'queso', price: 2 }], menu: [{ id: 'a', price: 1 }] }), /extra/);
+  const r = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
+  assert.deepEqual(r.menu.find(m => m.id === 'gaseosa').extras ?? [], [], 'el ejemplo no ofrece extras para la gaseosa');
+  assert.ok(r.menu.find(m => m.id === 'especial').extras.includes('queso'));
+});
