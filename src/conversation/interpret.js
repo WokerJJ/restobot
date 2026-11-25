@@ -102,8 +102,10 @@ function fromText(restaurant, state, raw) {
       const zone = (restaurant.deliveryZones || []).find(z => normalize(z.name) === t);
       return zone ? { type: 'zone', zoneId: zone.id } : null;
     }
-    case S.DIRECCION:
-      return { type: 'address', text: raw };
+    case S.DIRECCION: {
+      const address = raw.trim().replace(/\s+/g, ' ');
+      return address.length >= 5 && address.length <= 200 ? { type: 'address', text: address } : null;
+    }
     case S.PAGO: {
       const index = restaurant.payments.findIndex(p => normalize(p) === t);
       return index === -1 ? null : { type: 'payment', index };
