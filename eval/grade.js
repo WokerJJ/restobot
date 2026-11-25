@@ -55,18 +55,24 @@ function sameLine(a, e) {
   return Boolean(a.note) && options.some(n => sameNote(a.note, n));
 }
 
-// Para validar un caso contra el contrato, una nota con varias formas se valida forma por forma.
+// Para validar un caso contra el contrato, una nota con varias formas se valida forma por forma:
+// una variante por cada forma, con las demás líneas en su primera forma. Así se validan todas sin
+// armar el producto cartesiano (que crece sin control) ni recortarlo (que deja formas sin revisar).
+const firstForm = line => {
+  const [note] = noteOptions(line.note);
+  return note === undefined ? { ...line } : { ...line, note };
+};
+
 function expandNotes(intent) {
   if (intent?.type !== 'add_items') return [intent];
-  const variants = [[]];
-  for (const line of intent.items) {
-    const opts = noteOptions(line.note);
-    const lines = opts.length ? opts.map(note => ({ ...line, note })) : [{ ...line }];
-    const next = [];
-    for (const v of variants) for (const l of lines) next.push([...v, l]);
-    variants.splice(0, variants.length, ...next.slice(0, 50));
-  }
-  return variants.map(items => ({ ...intent, items }));
+  const base = intent.items.map(firstForm);
+  const variants = [{ ...intent, items: base }];
+  intent.items.forEach((line, i) => {
+    for (const note of noteOptions(line.note).slice(1)) {
+      variants.push({ ...intent, items: base.map((l, j) => (j === i ? { ...line, note } : l)) });
+    }
+  });
+  return variants;
 }
 
 // Las líneas se emparejan sin importar el orden: "una gaseosa y dos perros" es lo mismo
@@ -109,6 +115,11 @@ export function checkCase(restaurant, c) {
   if (!c.categoria) problems.push('sin categoría');
   for (const intent of [c.esperado, ...(c.aceptables || [])]) {
     if (intent === null) continue;
+    // Una forma vacía pasa el contrato, pero sameLine nunca la acepta: para "sin nota" se omite note.
+    if (intent?.type === 'add_items' && Array.isArray(intent.items) &&
+        intent.items.some(l => Array.isArray(l?.note) && l.note.some(n => typeof n === 'string' && !n.trim()))) {
+      problems.push(`nota vacía en la lista de formas: ${JSON.stringify(intent)}`);
+    }
     for (const variant of expandNotes(intent)) {
       const valid = validateIntent(restaurant, variant);
       if (!valid || !matches(valid, variant)) problems.push(`intención inválida: ${JSON.stringify(variant)}`);

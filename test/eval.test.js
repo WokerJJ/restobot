@@ -126,3 +126,22 @@ test('una nota esperada puede listar varias formas válidas de decir lo mismo', 
   assert.ok(!matches(obtenido(['sin cebolla', 'sin cebolla']), esperado), 'las notas no se cruzan entre productos');
   assert.deepEqual(checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado }), []);
 });
+
+test('checkCase valida cada forma de nota, sin recortar (BUG-020)', () => {
+  const formas = Array.from({ length: 60 }, (_, i) => `sin cebolla ${i}`);
+  formas[59] = 'x'.repeat(300);
+  const esperado = { type: 'add_items', items: [
+    { itemId: 'gaseosa', qty: 1, note: ['bien fría', 'helada'] },
+    { itemId: 'perro', qty: 1, note: formas }
+  ] };
+  const problemas = checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado });
+  assert.equal(problemas.length, 1, JSON.stringify(problemas).slice(0, 300));
+  assert.match(problemas[0], /^intención inválida: .*x{300}/);
+});
+
+test('checkCase rechaza una forma de nota vacía: para "sin nota" se omite note (BUG-021)', () => {
+  const esperado = { type: 'add_items', items: [{ itemId: 'perro', qty: 1, note: ['', 'sin cebolla'] }] };
+  const problemas = checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado });
+  assert.equal(problemas.length, 1);
+  assert.match(problemas[0], /nota vacía/);
+});
