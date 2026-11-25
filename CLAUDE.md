@@ -22,6 +22,7 @@ Asistente de WhatsApp para restaurantes que usa la Cloud API oficial de Meta: to
 
 - Interpretar, decidir y calcular van separados: `interpret.js` convierte el mensaje en una intención, `flow.js` la aplica y `pricing.js` calcula. `flow.js` es **puro**: `step(restaurante, sesión, mensaje, {intent})` devuelve el nuevo estado, las respuestas y, si el cliente confirmó, el pedido. Los efectos (base de datos, envío, avisos) viven en `src/conversation/bot.js`.
 - Toda intención que venga de un modelo de IA pasa por `validateIntent(..., {source: 'ia'})` (`src/conversation/intents.js`) antes de aplicarse; `step` lo hace siempre con lo que recibe en `opts.intent`.
+- El intérprete de IA vive en `src/ai/claude.js` y llama a la API por HTTP con `fetch` (sin SDK, por la regla de no tener dependencias). Su esquema de respuesta se arma desde la configuración del restaurante; las instrucciones no llevan precios.
 - Cuándo se llama a la IA: los botones y el audio van siempre por las reglas; la IA solo recibe **texto**, solo si las reglas devuelven null, y nunca mientras el chat está derivado a una persona (sería una llamada pagada que `step` descarta).
 - Un cambio en la interpretación se mide con `npm run evaluar` contra la línea base (los intérpretes de IA, con `{source: 'ia'}`). La métrica de acciones irreversibles indebidas tiene umbral 0.
 - Toda respuesta nueva del bot debe pasar `test/contract.test.js`, que valida los límites de la Cloud API: 3 botones, 10 filas, 1024 caracteres por cuerpo.

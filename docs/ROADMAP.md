@@ -22,7 +22,8 @@ Cada fase termina con pruebas en verde y algo que se puede demostrar.
 - ✅ Conjunto de evaluación (`eval/`, `npm run evaluar`) con métrica de acciones irreversibles indebidas. Línea base de las reglas: 35/72 (49 %), 0 indebidas.
 - ✅ Líneas del carrito con extras y notas (EVA-002): identidad por producto + extras + nota, tope de 50 por producto sumando sus líneas, extras permitidos por producto (`menu[].extras`), `add_items` (también desde el primer mensaje, con avisos para lo que no está en la carta) y `remove_item` (por producto o por línea exacta).
 - Cambiar una línea del carrito ("quítale la tocineta", "mejor que sean dos"): necesita una intención compuesta.
-- Intérprete con un modelo por API, validado con `validateIntent` y medido contra la línea base.
+- ✅ Intérprete con un modelo por API (`src/ai/claude.js`): salida estructurada desde la configuración, validado con `validateIntent`, solo para el texto que las reglas no entienden, y medible con `npm run evaluar -- claude` (acierto, acciones indebidas, latencia y costo).
+- Medir con la API real y elegir modelo y esfuerzo con esos números.
 - Preguntas frecuentes desde la configuración del restaurante (intención `question`).
 - Evaluación con chats reales anonimizados (Ley 1581), además de los casos inventados.
 

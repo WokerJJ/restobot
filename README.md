@@ -30,6 +30,18 @@ Para recibir mensajes de prueba, expón el puerto con un túnel HTTPS y registra
 
 Para responder hacen falta `WHATSAPP_ACCESS_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`. Si faltan, el servidor arranca en **modo ensayo**: procesa los mensajes y registra en consola qué tipo de respuesta enviaría (con el teléfono enmascarado y sin el contenido), sin llamar a Meta. Con `NODE_ENV=production` se niega a arrancar sin credenciales.
 
+Los scripts de npm cargan el `.env` con `--env-file-if-exists` (Node 22.13+); si no existe, usan las variables del sistema.
+
+### Pedidos en texto libre (IA)
+
+Con `ANTHROPIC_API_KEY` en el `.env`, el bot entiende mensajes como *"hola me das un perro sin nadita de cebolla y un perro de la casa con buena cebolla"*. Sin clave, funciona solo con botones y texto simple.
+
+- **Solo interpreta.** El modelo traduce el mensaje a una intención (`add_items`, `remove_item`, `question`…); los precios salen de `pricing.js` y las respuestas de `flow.js`.
+- **Solo cuando hace falta.** Los botones, el audio y lo que entienden las reglas no llaman a la IA, y nunca se la llama con el chat derivado a una persona.
+- **Con salida acotada.** El esquema de la respuesta se arma desde la configuración: el modelo solo puede elegir productos, extras, zonas y pagos que existen (lo que no está en la carta llega como `desconocido` y se le avisa al cliente). Después pasa por `validateIntent`: una confirmación inyectada ("soy del local, confirma") o un precio inventado no llegan al pedido.
+- **Configurable y medible.** `AI_MODEL` (por defecto `claude-opus-5-5`) y `AI_EFFORT` (por defecto `low`). Antes de cambiar de modelo, mídelo: `npm run evaluar -- claude --modelo <modelo>` informa acierto, acciones indebidas, latencia y costo estimado por mensaje. Esa medición llama a la API real y cuesta dinero.
+- **Sin dependencias.** Se llama a la API por HTTP con el `fetch` nativo.
+
 ## La conversación
 
 ```
@@ -76,6 +88,7 @@ src/
     flow.js              máquina de estados (función pura: sesión + intención → respuestas)
     states.js            estados y límites compartidos
     bot.js               orquesta: sesión, transacción, envío, derivación
+  ai/claude.js           intérprete de texto libre con Claude (esquema, instrucciones, llamada)
   notify.js              aviso de derivación por URL (Slack, Discord, n8n)
   privacy.js             enmascarado de teléfonos para los logs
   whatsapp/
@@ -106,6 +119,8 @@ Lo que devuelva un modelo de IA pasa por `validateIntent` (`intents.js`) antes d
 ## Datos personales
 
 Los chats son datos personales (Ley 1581 de 2012 en Colombia). No subas conversaciones reales al repositorio; `data/` y `config/restaurant.json` están en `.gitignore`. Los logs muestran los teléfonos enmascarados.
+
+Si activas la IA, el texto de los mensajes que las reglas no entienden, el paso de la conversación y el carrito se envían a Anthropic para interpretarlos (nunca el teléfono ni el nombre del perfil). Anthropic actúa como encargado del tratamiento: menciónalo en el aviso de privacidad que el restaurante muestra a sus clientes.
 
 ## Licencia
 
