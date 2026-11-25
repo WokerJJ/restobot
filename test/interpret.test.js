@@ -70,9 +70,11 @@ test('step valida la intención dada: una mal formada se trata como "no entendí
   assert.equal(address.state, S.DIRECCION);
   assert.equal(address.data.address, undefined);
 
+  // Sin motivo ya no deriva con reason undefined: la intención externa es de la IA, así que el
+  // motivo queda en 'ia' (EVA-013).
   const human = step(r, { state: S.MENU, data: { cart: [] } }, txt('x'), { intent: { type: 'human' } });
-  assert.equal(human.state, S.MENU);
-  assert.equal(human.handoff, undefined);
+  assert.equal(human.state, S.HUMANO);
+  assert.deepEqual(human.handoff, { reason: 'ia' });
 });
 
 test('la IA puede derivar a una persona: step la deja con motivo "ia" aunque diga otro', () => {
