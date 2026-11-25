@@ -111,3 +111,18 @@ test('con source "ia" la salida pasa por el contrato de la IA y human se compara
   assert.equal(audio.ok, 0);
   assert.equal(audio.results[0].obtenido, null, 'la IA no puede producir media');
 });
+
+test('una nota esperada puede listar varias formas válidas de decir lo mismo', () => {
+  const esperado = { type: 'add_items', items: [
+    { itemId: 'perro', qty: 1, note: ['sin cebolla', 'sin nada de cebolla', 'sin nadita de cebolla'] },
+    { itemId: 'especial', qty: 1, note: ['con bastante cebolla', 'con buena cebolla'] }
+  ] };
+  const obtenido = notas => ({ type: 'add_items', items: [
+    { itemId: 'especial', qty: 1, note: notas[1] }, { itemId: 'perro', qty: 1, note: notas[0] }
+  ] });
+  assert.ok(matches(obtenido(['sin nadita de cebolla', 'con buena cebolla']), esperado));
+  assert.ok(matches(obtenido(['sin cebolla', 'con bastante cebolla']), esperado));
+  assert.ok(!matches(obtenido(['con cebolla', 'con buena cebolla']), esperado), 'el sentido sigue importando');
+  assert.ok(!matches(obtenido(['sin cebolla', 'sin cebolla']), esperado), 'las notas no se cruzan entre productos');
+  assert.deepEqual(checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado }), []);
+});

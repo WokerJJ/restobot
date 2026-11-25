@@ -42,11 +42,31 @@ const NOTE_FILLER = new Set(['de', 'del', 'el', 'la', 'los', 'las', 'un', 'una',
 const noteContent = s => words(s).filter(w => !NOTE_FILLER.has(w)).join(' ');
 const sameNote = (actual, expected) => noteContent(actual) === noteContent(expected);
 
+// En un caso, la nota esperada puede ser una lista de formas válidas de decir lo mismo:
+// "sin cebolla", "sin nada de cebolla", "sin nadita de cebolla". Se prefiere a ampliar
+// NOTE_FILLER, porque cada caso declara de forma explícita qué paráfrasis acepta.
+const noteOptions = note => (Array.isArray(note) ? note : note ? [note] : []);
+
 function sameLine(a, e) {
   if (a.itemId !== e.itemId || a.qty !== e.qty) return false;
   if (!isDeepStrictEqual(a.extras || [], [...(e.extras || [])].sort())) return false;
-  if (!e.note) return !a.note;
-  return Boolean(a.note) && sameNote(a.note, e.note);
+  const options = noteOptions(e.note);
+  if (!options.length) return !a.note;
+  return Boolean(a.note) && options.some(n => sameNote(a.note, n));
+}
+
+// Para validar un caso contra el contrato, una nota con varias formas se valida forma por forma.
+function expandNotes(intent) {
+  if (intent?.type !== 'add_items') return [intent];
+  const variants = [[]];
+  for (const line of intent.items) {
+    const opts = noteOptions(line.note);
+    const lines = opts.length ? opts.map(note => ({ ...line, note })) : [{ ...line }];
+    const next = [];
+    for (const v of variants) for (const l of lines) next.push([...v, l]);
+    variants.splice(0, variants.length, ...next.slice(0, 50));
+  }
+  return variants.map(items => ({ ...intent, items }));
 }
 
 // Las líneas se emparejan sin importar el orden: "una gaseosa y dos perros" es lo mismo
@@ -89,8 +109,10 @@ export function checkCase(restaurant, c) {
   if (!c.categoria) problems.push('sin categoría');
   for (const intent of [c.esperado, ...(c.aceptables || [])]) {
     if (intent === null) continue;
-    const valid = validateIntent(restaurant, intent);
-    if (!valid || !matches(valid, intent)) problems.push(`intención inválida: ${JSON.stringify(intent)}`);
+    for (const variant of expandNotes(intent)) {
+      const valid = validateIntent(restaurant, variant);
+      if (!valid || !matches(valid, variant)) problems.push(`intención inválida: ${JSON.stringify(variant)}`);
+    }
   }
   return problems;
 }

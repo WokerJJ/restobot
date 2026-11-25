@@ -32,6 +32,17 @@
       "esperado": { "type": "start_order" } },
     { "id": "inicio-03", "categoria": "primer-mensaje", "estado": "inicio", "texto": "hola",
       "esperado": null },
+    { "id": "inicio-05", "categoria": "primer-mensaje", "estado": "inicio",
+      "texto": "hola me puedes dar un perro, sin nadita de cebolla porfavor, ah y un perro de la casa con buena cebolla",
+      "esperado": { "type": "add_items", "items": [
+        { "itemId": "perro", "qty": 1, "note": ["sin cebolla", "sin nada de cebolla", "sin nadita de cebolla"] },
+        { "itemId": "especial", "qty": 1, "note": ["con buena cebolla", "con bastante cebolla", "con mucha cebolla", "con harta cebolla", "con extra de cebolla"] }
+      ] } },
+    { "id": "sinonimo-01", "categoria": "pedido-libre", "estado": "menu", "texto": "me regala un perro de la casa",
+      "esperado": { "type": "add_items", "items": [{ "itemId": "especial", "qty": 1 }] },
+      "aceptables": [{ "type": "select_item", "itemId": "especial" }] },
+    { "id": "sinonimo-02", "categoria": "pedido-libre", "estado": "menu", "texto": "dos salchipas porfa",
+      "esperado": { "type": "add_items", "items": [{ "itemId": "salchipapa", "qty": 2 }] } },
     { "id": "inicio-04", "categoria": "primer-mensaje", "estado": "inicio", "texto": "hasta qué hora atienden hoy?",
       "esperado": { "type": "question", "topic": "horario" } },
 
