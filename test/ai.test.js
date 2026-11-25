@@ -158,6 +158,17 @@ test('un error de la API lanza sin exponer la clave', async () => {
   assert.throws(() => createClaudeInterpreter({ apiKey: '' }), /ANTHROPIC_API_KEY/);
 });
 
+test('la llamada se corta al vencer timeoutMs (EVA-032)', async () => {
+  // Un fetch que nunca responde y respeta la señal, como el fetch real.
+  const colgado = (url, init) => new Promise((_, reject) => {
+    init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+  });
+  const t0 = performance.now();
+  const err = await interp(colgado, { timeoutMs: 30 })(r, 'menu', msg('x')).catch(e => e);
+  assert.equal(err?.name, 'TimeoutError');
+  assert.ok(performance.now() - t0 < 2000, 'no espera más de la cuenta');
+});
+
 test('la espera por defecto es de 8 s: la cola del cliente no queda bloqueada 20 s (EVA-027)', () => {
   assert.equal(DEFAULT_TIMEOUT_MS, 8000);
 });

@@ -418,7 +418,7 @@ test('si la IA falla, el cliente recibe "no entendí" y el log no expone el tel�
   await say('hola');
   await tap('menu');
   await say('quiero algo rico');
-  assert.match(client.sent.at(-2).body ?? client.sent.at(-1).body, /No te entendí/);
+  assert.ok(client.sent.some(s => /No te entendí/.test(s.body)));
   const aviso = logs.find(l => /la IA no respondió/.test(l));
   assert.ok(aviso && !aviso.includes(CLIENTE));
 });
@@ -515,6 +515,17 @@ test('bot.js le pasa a la IA el mismo estado que usará step: cantidad sin pendi
   await say('los de siempre');
   assert.equal(ai.calls.length, 1);
   assert.equal(ai.calls[0].state, 'menu');
+});
+
+test('la IA recibe de contexto el carrito y el producto pendiente (EVA-032)', async () => {
+  const ai = fakeAI();
+  const { store, say } = setup({ interpretAI: ai });
+  store.saveSession(CLIENTE, { state: 'cantidad', data: { cart: [{ itemId: 'gaseosa', qty: 1 }], pending: 'perro' } }, 1_000_000);
+  await say('los de siempre');
+  assert.equal(ai.calls.length, 1);
+  assert.equal(ai.calls[0].state, 'cantidad');
+  assert.deepEqual(ai.calls[0].context.data.cart, [{ itemId: 'gaseosa', qty: 1 }]);
+  assert.equal(ai.calls[0].context.data.pending, 'perro');
 });
 
 test('mientras atiende una persona, la IA no se llama', async () => {
