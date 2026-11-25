@@ -174,3 +174,12 @@ test('el costo se informa medido y en el peor caso, sin caché (EVA-029)', async
   assert.deepEqual(estimateCost(usage, undefined),
     { costUsd: null, costPerCallUsd: null, worstCaseUsd: null, worstCasePerCallUsd: null }, 'sin precio conocido');
 });
+
+test('el costo máximo de una corrida es un techo: prompt como escritura en caché y respuesta completa', async () => {
+  const { maxRunCost, PRICES } = await import('../eval/cost.js');
+  // 10 llamadas, prompt de 3000 caracteres (1000 tokens), respuesta de 1000 tokens, Opus 5.5:
+  // 10 × (1000 × 4 × 1,25 + 1000 × 20) / 1e6 = 0,25
+  assert.equal(maxRunCost({ calls: 10, promptChars: 3000, maxTokens: 1000 }, PRICES['claude-opus-5-5']), 0.25);
+  assert.equal(maxRunCost({ calls: 10, promptChars: 3000, maxTokens: 1000 }, undefined), null, 'sin precio no inventa un número');
+  assert.ok(maxRunCost({ calls: 72, promptChars: 6000, maxTokens: 1024 }, PRICES['claude-haiku-5-5']) < 0.1);
+});

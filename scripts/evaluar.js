@@ -1,31 +1,29 @@
 // Mide qué tan bien se interpretan los mensajes del conjunto de evaluación.
 // Uso: npm run evaluar                                  → intérprete por reglas (línea base)
-//      npm run evaluar -- claude                        → Claude con AI_MODEL y AI_EFFORT del .env
-//      npm run evaluar -- claude --modelo claude-haiku-5-5 --esfuerzo low
+//      npm run evaluar -- claude                        → solo muestra el costo máximo, no llama
+//      npm run evaluar -- claude --confirmar            → Claude con AI_MODEL y AI_EFFORT del .env
+//      npm run evaluar -- claude --modelo claude-haiku-5-5 --esfuerzo low --confirmar
 //      npm run evaluar -- --json                        → resultado completo en JSON
 //
 // Es una medición, no una prueba: no falla si el porcentaje es bajo. Sirve para comparar
 // intérpretes (reglas, distintos modelos de IA) sobre los mismos casos.
-// Ojo: el intérprete de Claude llama a la API real (cuesta dinero; el informe estima cuánto).
+// Ojo: el intérprete de Claude llama a la API real y cuesta dinero. Sin --confirmar no hace
+// ninguna llamada: solo muestra cuántas haría y el costo máximo posible. Es un candado para que
+// nadie (ni una persona ni un agente) gaste por error.
 
 import { loadEnv, loadRestaurant } from '../src/config.js';
 import { interpret } from '../src/conversation/interpret.js';
-import { createClaudeInterpreter } from '../src/ai/claude.js';
+import { createClaudeInterpreter, buildSystemPrompt, MAX_TOKENS } from '../src/ai/claude.js';
 import { loadCases, evaluate } from '../eval/grade.js';
-import { estimateCost } from '../eval/cost.js';
-
-// Precios en dólares por millón de tokens, para estimar el costo del informe. Revísalos en la
-// página de precios de Anthropic antes de decidir con ellos. Escritura en caché: 1,25 × entrada.
-const PRICES = {
-  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2 },
-  'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.1 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01 }
-};
+import { estimateCost, maxRunCost, PRICES } from '../eval/cost.js';
 
 const args = process.argv.slice(2);
 const flag = name => { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; };
 const name = args.find((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--')) || 'reglas';
 const env = loadEnv();
+// Los casos usan los productos, zonas y pagos del menú de ejemplo.
+const restaurant = loadRestaurant('config/restaurant.example.json');
+const cases = loadCases();
 
 const usage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, calls: 0, ms: 0 };
 let interpreter;
@@ -36,13 +34,25 @@ if (name === 'reglas') {
   // Las reglas se evalúan sin source.
   interpreter = (restaurant, state, msg) => interpret(restaurant, state, msg);
 } else if (name === 'claude') {
+  model = flag('--modelo') || env.aiModel;
+  const effort = flag('--esfuerzo') || env.aiEffort;
+  if (!args.includes('--confirmar')) {
+    // Candado de gasto: sin --confirmar no se llama a la API.
+    // El prompt de cada llamada: las instrucciones más el mensaje con el carrito (~400 caracteres).
+    const max = maxRunCost({ calls: cases.length, promptChars: buildSystemPrompt(restaurant).length + 400, maxTokens: MAX_TOKENS }, PRICES[model]);
+    console.log(`Esto haría ${cases.length} llamadas a ${model} (esfuerzo ${effort}).`);
+    console.log(max === null
+      ? 'No conozco el precio de ese modelo: revisa la página de precios de Anthropic antes de correrlo.'
+      : `Costo máximo posible: US$${max.toFixed(2)} (si cada respuesta usara todo max_tokens y nada saliera de la caché; el real es menor).`);
+    console.log(`Para ejecutarlo: npm run evaluar -- claude --modelo ${model} --esfuerzo ${effort} --confirmar`);
+    process.exit(0);
+  }
   if (!env.anthropicApiKey) {
     console.error('Falta ANTHROPIC_API_KEY (en .env o en el entorno) para evaluar con Claude.');
     process.exit(1);
   }
-  model = flag('--modelo') || env.aiModel;
   const claude = createClaudeInterpreter({
-    apiKey: env.anthropicApiKey, model, effort: flag('--esfuerzo') || env.aiEffort,
+    apiKey: env.anthropicApiKey, model, effort,
     onUsage: u => {
       usage.input += u?.input_tokens || 0;
       usage.output += u?.output_tokens || 0;
@@ -61,9 +71,7 @@ if (name === 'reglas') {
   process.exit(1);
 }
 
-// Los casos usan los productos, zonas y pagos del menú de ejemplo.
-const restaurant = loadRestaurant('config/restaurant.example.json');
-const report = await evaluate(restaurant, loadCases(), interpreter, options);
+const report = await evaluate(restaurant, cases, interpreter, options);
 
 function costReport() {
   if (!usage.calls) return null;
