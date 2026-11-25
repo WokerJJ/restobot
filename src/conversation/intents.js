@@ -47,7 +47,9 @@
 //
 // Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio, y
 // menu_page y continue de un botón, nunca de texto. En human se ignora el via que traiga y queda
-// via: 'ia', para que el motivo de la derivación (log y aviso al local) no se pueda falsear.
+// via: 'ia'. De todos modos, flow.js no aplica directo un human, confirm, cancel ni clear_cart de
+// la IA: le pide al cliente que toque el botón (BUG-024), así que una derivación siempre queda
+// con el motivo real ('boton' o 'frase').
 
 export const INTENT_TYPES = Object.freeze([
   'human', 'cancel', 'menu', 'media', 'start_order', 'select_item', 'menu_page', 'view_cart',
