@@ -61,6 +61,15 @@ test('etaMinutes falta o es [mínimo, máximo] en minutos enteros (BUG-027)', ()
   }
 });
 
+test('los nombres de zona y de medio de pago tienen un largo máximo (BUG-028)', () => {
+  const base = { name: 'x', menu: [{ id: 'a', price: 1000 }], payments: ['Efectivo'] };
+  const zone = name => ({ ...base, deliveryZones: [{ id: 'z', name, fee: 1000 }] });
+  assert.doesNotThrow(() => validateRestaurant(zone('z'.repeat(60))));
+  assert.throws(() => validateRestaurant(zone('z'.repeat(61))), /zona/);
+  assert.doesNotThrow(() => validateRestaurant({ ...base, payments: ['p'.repeat(40)] }));
+  assert.throws(() => validateRestaurant({ ...base, payments: ['p'.repeat(41)] }), /pago/);
+});
+
 test('cada producto declara qué extras admite, y deben existir', () => {
   const base = { name: 'x', payments: ['Efectivo'], extras: [{ id: 'queso', name: 'Queso', price: 2000 }] };
   assert.doesNotThrow(() => validateRestaurant({ ...base, menu: [{ id: 'a', price: 1000, extras: ['queso'] }, { id: 'b', price: 1000 }] }));

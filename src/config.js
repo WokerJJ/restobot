@@ -50,6 +50,9 @@ export function loadRestaurant(path) {
 
 // Un tope razonable para el tiempo de un pedido (10 horas): más que eso es un error de configuración.
 const MAX_ETA_MINUTES = 600;
+// Largo máximo de los nombres que se listan juntos en una respuesta (BUG-028).
+const MAX_ZONE_NAME = 60;
+const MAX_PAYMENT_NAME = 40;
 
 export function validateRestaurant(r) {
   const ids = new Set();
@@ -79,6 +82,8 @@ export function validateRestaurant(r) {
     if (!z.id || zoneIds.has(z.id)) throw new Error(`id de zona repetido o vacío: ${z.id}`);
     zoneIds.add(z.id);
     if (!z.name) throw new Error(`la zona ${z.id} necesita nombre`);
+    // Las 9 zonas van juntas en una respuesta de texto (máximo 4096 caracteres) (BUG-028).
+    if (z.name.length > MAX_ZONE_NAME) throw new Error(`el nombre de la zona ${z.id} pasa de ${MAX_ZONE_NAME} caracteres`);
     if (!Number.isInteger(z.fee) || z.fee < 0) throw new Error(`costo de domicilio inválido (use pesos enteros): ${z.id}`);
   }
   // Tiempo de preparación o entrega: [mínimo, máximo] en minutos enteros, o nada (BUG-027).
@@ -92,5 +97,7 @@ export function validateRestaurant(r) {
   if (!Array.isArray(r.payments) || !r.payments.length || !r.payments.every(p => typeof p === 'string' && p.trim())) {
     throw new Error('restaurant.payments debe tener al menos un medio de pago');
   }
+  const longPayment = r.payments.find(p => p.length > MAX_PAYMENT_NAME);
+  if (longPayment) throw new Error(`el medio de pago "${longPayment.slice(0, 20)}…" pasa de ${MAX_PAYMENT_NAME} caracteres`);
   return r;
 }
