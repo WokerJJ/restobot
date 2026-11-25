@@ -163,10 +163,18 @@ test('la llamada se corta al vencer timeoutMs (EVA-032)', async () => {
   const colgado = (url, init) => new Promise((_, reject) => {
     init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
   });
-  const t0 = performance.now();
-  const err = await interp(colgado, { timeoutMs: 30 })(r, 'menu', msg('x')).catch(e => e);
-  assert.equal(err?.name, 'TimeoutError');
-  assert.ok(performance.now() - t0 < 2000, 'no espera más de la cuenta');
+  // El temporizador de AbortSignal.timeout no mantiene vivo el proceso (está unref) y este fetch
+  // falso no abre socket: sin algo que retenga el event loop, Node 22 da la promesa por perdida
+  // antes de que venza el timeout. Un fetch real sí lo retiene con su socket.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const t0 = performance.now();
+    const err = await interp(colgado, { timeoutMs: 30 })(r, 'menu', msg('x')).catch(e => e);
+    assert.equal(err?.name, 'TimeoutError');
+    assert.ok(performance.now() - t0 < 2000, 'no espera más de la cuenta');
+  } finally {
+    clearInterval(keepAlive);
+  }
 });
 
 test('la espera por defecto es de 8 s: la cola del cliente no queda bloqueada 20 s (EVA-027)', () => {
