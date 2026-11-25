@@ -41,6 +41,7 @@ inicio ─► saludo ─► menú ─► cantidad ─► carrito ─┬─► zo
 ```
 
 - **Botones y listas** de WhatsApp en cada paso; también entiende texto simple: nombres o alias del menú, cantidades ("2", "dos"), "listo", "cancelar", "menú".
+- **Carrito con extras y notas:** cada línea es producto + extras + nota ("1 × Perro sencillo + Tocineta (sin piña)"). Las idénticas se suman; el tope es de 50 unidades por producto sumando todas sus líneas y de 20 líneas por pedido, y si algo se pasa se avisa en vez de recortar. Cada producto declara qué extras admite (`menu[].extras`), y los sinónimos que usan los clientes van en `menu[].aliases` (por ejemplo, un nombre de la casa que no está en la carta).
 - **Lectura del pedido antes de confirmar:** el resumen sale de `describeOrder` con el detalle, el domicilio, la forma de entrega y el pago.
 - **Derivación a una persona** con el botón "Hablar con persona" o frases explícitas como "quiero hablar con un asesor" (una frase que solo menciona "persona", como "una para cada persona", no deriva). Desde ahí el bot no responde hasta que alguien libera el chat o pasan 24 horas sin mensajes del cliente, igual que la ventana de atención de Meta; aunque el cliente siga escribiendo, la derivación vence a las 72 horas de iniciada, para que nadie quede sin respuesta si el aviso al local falla. Si configuras `HANDOFF_WEBHOOK_URL`, el local recibe un aviso al instante (el JSON trae `text` para Slack y `content` para Discord). Tras dos mensajes que no entiende, ofrece la derivación.
 - **Sesiones en SQLite** (tabla `sessions`): el estado sobrevive a reinicios. Un carrito abandonado más de 3 horas se descarta y se le avisa al cliente.
@@ -98,7 +99,7 @@ Lo que devuelva un modelo de IA pasa por `validateIntent` (`intents.js`) antes d
 
 ### Medir la interpretación
 
-`npm run evaluar` ejecuta un intérprete sobre `eval/interpretacion.json`: 67 mensajes inventados en español colombiano con la intención correcta de cada uno. Informa el acierto por categoría, cada fallo y, aparte, las acciones irreversibles indebidas (confirmar, cancelar, vaciar el carrito o derivar cuando no correspondía), cuyo umbral es 0. Es una medición, no una prueba: sirve para comparar intérpretes con los mismos casos. Línea base de las reglas: **35/67 (52 %)**, con 0 acciones indebidas; fallan en pedidos en texto libre ("dos perros, uno sin cebolla") y en preguntas, que es lo que resolverá la IA.
+`npm run evaluar` ejecuta un intérprete sobre `eval/interpretacion.json`: 70 mensajes inventados en español colombiano con la intención correcta de cada uno. Informa el acierto por categoría, cada fallo y, aparte, las acciones irreversibles indebidas (confirmar, cancelar, vaciar el carrito o derivar cuando no correspondía), cuyo umbral es 0. Es una medición, no una prueba: sirve para comparar intérpretes con los mismos casos. Línea base de las reglas: **35/70 (50 %)**, con 0 acciones indebidas; fallan en pedidos en texto libre ("dos perros, uno sin cebolla") y en preguntas, que es lo que resolverá la IA.
 
 ## Datos personales
 
