@@ -6,11 +6,11 @@
   "license": "MIT",
   "engines": { "node": ">=22.13" },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
     "test": "node --test",
     "simular": "node scripts/simular.js",
-    "derivaciones": "node scripts/derivaciones.js",
-    "evaluar": "node scripts/evaluar.js"
+    "derivaciones": "node --env-file-if-exists=.env scripts/derivaciones.js",
+    "evaluar": "node --env-file-if-exists=.env scripts/evaluar.js"
   }
 }
