@@ -384,7 +384,7 @@ describe('líneas con extras y notas (EVA-002)', () => {
     const cart = Array.from({ length: 20 }, (_, i) => ({ itemId: 'perro', qty: 1, note: `nota ${i}` }));
     const res = step(r, ses(S.CARRITO, { cart }), txt('x'), add([{ itemId: 'gaseosa', qty: 1 }]));
     assert.equal(res.data.cart.length, 20);
-    assert.match(bodies(res), /hasta 20 productos distintos/);
+    assert.match(bodies(res), /hasta 20 líneas \(producto, extras y nota\)/);
   });
 
   test('el primer mensaje con pedido saluda y arma el carrito, en vez de perderlo', () => {
@@ -392,7 +392,23 @@ describe('líneas con extras y notas (EVA-002)', () => {
     assert.equal(res.state, S.CARRITO);
     assert.deepEqual(res.data.cart, [{ itemId: 'salchipapa', qty: 2 }]);
     assert.match(res.replies[0].body, /¡Hola, Ana!.*Bienvenido/);
+    assert.match(res.replies[0].body, /Horario/, 'la bienvenida corta también lleva el horario');
     assert.match(bodies(res), /2 × Salchipapa/);
+  });
+
+  test('si el primer mensaje se pasa del tope, saluda con el aviso en vez de perder el pedido (BUG-018)', () => {
+    const res = step(r, null, { ...txt('me regala 60 perros'), name: 'Ana' }, add([{ itemId: 'perro', qty: 60 }]));
+    assert.equal(res.state, S.SALUDO);
+    assert.deepEqual(res.data.cart, []);
+    assert.match(bodies(res), /hasta 50 unidades de Perro sencillo/);
+    assert.match(bodies(res), /¡Hola, Ana!.*Horario/s);
+    assert.deepEqual(ids(res), ['menu', 'human']);
+  });
+
+  test('add_items en el saludo arma el carrito (EVA-025)', () => {
+    const res = step(r, ses(S.SALUDO), txt('x'), add([{ itemId: 'perro', qty: 2 }]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 2 }]);
   });
 
   test('en el paso de la cantidad, un pedido completo reemplaza la pregunta', () => {

@@ -56,13 +56,13 @@ const priceCart = (restaurant, data, withZone = false) =>
 
 // El saludo va en un mensaje con botones (cuerpo de máximo 1024 caracteres): el nombre del
 // restaurante y el horario vienen de la configuración y se recortan para que siempre quepa.
+// La usan el saludo y la bienvenida corta del primer mensaje con pedido.
 const welcome = (restaurant, name) =>
-  `${name ? `¡Hola, ${clip(name, 30)}! 👋` : '¡Hola! 👋'} Bienvenido a ${clip(restaurant.name, 100)}.`;
+  `${name ? `¡Hola, ${clip(name, 30)}! 👋` : '¡Hola! 👋'} Bienvenido a ${clip(restaurant.name, 100)}.` +
+  (restaurant.hours ? `\nHorario: ${clip(restaurant.hours.replace(/\.$/, ''), 600)}.` : '');
 
 function greeting(restaurant, name) {
-  const body = welcome(restaurant, name) +
-    (restaurant.hours ? `\nHorario: ${clip(restaurant.hours.replace(/\.$/, ''), 600)}.` : '') +
-    '\n\n¿Qué quieres hacer?';
+  const body = welcome(restaurant, name) + '\n\n¿Qué quieres hacer?';
   return [{ kind: 'buttons', body, buttons: [{ id: 'menu', title: 'Hacer pedido' }, HUMAN_BUTTON] }];
 }
 
@@ -211,7 +211,7 @@ function addLines(restaurant, cart, items) {
     const total = next.filter(l => l.itemId === id).reduce((n, l) => n + l.qty, 0);
     if (total > MAX_QTY) return { error: `Se pueden pedir hasta ${MAX_QTY} unidades de ${itemName(restaurant, id)} por pedido.` };
   }
-  if (next.length > MAX_CART_LINES) return { error: `Un pedido admite hasta ${MAX_CART_LINES} productos distintos.` };
+  if (next.length > MAX_CART_LINES) return { error: `Un pedido admite hasta ${MAX_CART_LINES} líneas (producto, extras y nota).` };
   return { cart: next };
 }
 
@@ -368,9 +368,11 @@ export function step(restaurant, session, msg, { intent } = {}) {
 
   if (state === S.INICIO) {
     // "Buenas, me regala 2 salchipapas" como primer mensaje: se saluda y se arma el pedido.
+    // Si se pasa de un tope, se saluda con el aviso: el pedido no desaparece en silencio.
     if (it?.type === 'add_items') {
       const res = addLines(restaurant, [], it.items);
-      if (!res.error) return go(restaurant, S.CARRITO, { cart: res.cart }, [text(welcome(restaurant, msg.name))]);
+      if (res.error) return { state: S.SALUDO, data: { cart: [] }, replies: [text(res.error), ...greeting(restaurant, msg.name)] };
+      return go(restaurant, S.CARRITO, { cart: res.cart }, [text(welcome(restaurant, msg.name))]);
     }
     return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
   }
