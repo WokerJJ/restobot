@@ -87,3 +87,23 @@ test('con source "ia" solo pasan las intenciones que la IA puede producir (EVA-0
   assert.deepEqual(v({ type: 'human', via: 'boton' }), { type: 'human', via: 'boton' });
   assert.equal(v({ type: 'human', via: 'ia' }), null);
 });
+
+test('add_items solo acepta los extras que cada producto admite (EVA-002)', () => {
+  assert.deepEqual(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, extras: ['queso'] }] }),
+    { type: 'add_items', items: [{ itemId: 'perro', qty: 1, extras: ['queso'] }] });
+  assert.equal(v({ type: 'add_items', items: [{ itemId: 'gaseosa', qty: 1, extras: ['queso'] }] }), null,
+    'la gaseosa no admite queso');
+});
+
+test('las notas se limpian de caracteres de control antes de mostrarse', () => {
+  const res = v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, note: 'sin\npiña‮\u0000 ' }] });
+  assert.deepEqual(res.items[0], { itemId: 'perro', qty: 1, note: 'sin piña' });
+});
+
+test('remove_item: producto del menú y cantidad opcional', () => {
+  assert.deepEqual(v({ type: 'remove_item', itemId: 'gaseosa' }), { type: 'remove_item', itemId: 'gaseosa' });
+  assert.deepEqual(v({ type: 'remove_item', itemId: 'perro', qty: 2, extra: 1 }), { type: 'remove_item', itemId: 'perro', qty: 2 });
+  assert.equal(v({ type: 'remove_item', itemId: 'pizza' }), null);
+  assert.equal(v({ type: 'remove_item', itemId: 'perro', qty: 0 }), null);
+  assert.deepEqual(validateIntent(r, { type: 'remove_item', itemId: 'perro' }, { source: 'ia' }), { type: 'remove_item', itemId: 'perro' });
+});

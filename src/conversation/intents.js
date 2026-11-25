@@ -19,8 +19,10 @@
 //   { type: 'address', text }                     5 a 200 caracteres
 //   { type: 'payment', index }                    índice en restaurant.payments
 //   { type: 'confirm' } | { type: 'edit' }
-// Reservadas para la IA; flow.js todavía no las aplica (las trata como "no entendí"):
-//   { type: 'add_items', items: [{ itemId, qty, extras?: [extraId], note? }] }   (EVA-002)
+//   { type: 'add_items', items: [{ itemId, qty, extras?: [extraId], note? }] }
+//        extras: solo los que el producto admite (menu[].extras); note: hasta 140 caracteres
+//   { type: 'remove_item', itemId, qty? }         sin qty quita todas las unidades del producto
+// Reservada para la IA; flow.js todavía no la aplica (la trata como "no entendí"):
 //   { type: 'question', topic: 'horario' | 'zonas' | 'pagos' | 'tiempo' | 'otro' }
 //
 // Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio y
@@ -30,7 +32,7 @@
 export const INTENT_TYPES = Object.freeze([
   'human', 'cancel', 'menu', 'media', 'start_order', 'select_item', 'menu_page', 'view_cart',
   'quantity', 'add_more', 'checkout', 'clear_cart', 'zone', 'pickup', 'address', 'payment',
-  'confirm', 'edit', 'add_items', 'question'
+  'confirm', 'edit', 'add_items', 'remove_item', 'question'
 ]);
 // Lo que puede devolver un modelo de IA: todo menos media y menu_page.
 export const AI_INTENT_TYPES = Object.freeze(INTENT_TYPES.filter(t => t !== 'media' && t !== 'menu_page'));
@@ -44,23 +46,40 @@ export const MAX_NOTE_LENGTH = 140;
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isInt = (n, min, max) => Number.isInteger(n) && n >= min && n <= max;
 
+// Caracteres de control y de formato (saltos de línea, \u202e que invierte el texto...): la
+// nota se muestra al cliente y al local, así que se reemplazan por espacios.
+const CONTROL_CHARS = /[\p{Cc}\p{Cf}]/gu;
+
+/**
+ * Valida y normaliza una línea de pedido: producto del menú, cantidad, extras que el producto
+ * admite (sin repetir, ordenados) y nota limpia. La usan el contrato (maxQty 999: lo
+ * "entendido") y flow.js al limpiar el carrito guardado (maxQty MAX_QTY: lo que se cobra).
+ * @returns {{itemId:string, qty:number, extras?:string[], note?:string}|null}
+ */
+export function cleanLine(restaurant, line, { maxQty = MAX_QTY_UNDERSTOOD } = {}) {
+  if (!isPlainObject(line) || !isInt(line.qty, 1, maxQty)) return null;
+  const item = restaurant.menu.find(m => m.id === line.itemId);
+  if (!item) return null;
+  const out = { itemId: item.id, qty: line.qty };
+  if (line.extras !== undefined) {
+    const allowed = new Set(item.extras || []);
+    if (!Array.isArray(line.extras) || !line.extras.every(e => allowed.has(e))) return null;
+    if (line.extras.length) out.extras = [...new Set(line.extras)].sort();
+  }
+  if (line.note !== undefined) {
+    if (typeof line.note !== 'string' || line.note.length > MAX_NOTE_LENGTH) return null;
+    const note = line.note.replace(CONTROL_CHARS, ' ').trim().replace(/\s+/g, ' ');
+    if (note) out.note = note;
+  }
+  return out;
+}
+
 function validateItems(restaurant, items) {
   if (!Array.isArray(items) || items.length < 1 || items.length > MAX_ITEMS_PER_INTENT) return null;
-  const menu = new Set(restaurant.menu.map(m => m.id));
-  const extras = new Set((restaurant.extras || []).map(e => e.id));
   const out = [];
   for (const it of items) {
-    if (!isPlainObject(it) || !menu.has(it.itemId) || !isInt(it.qty, 1, MAX_QTY_UNDERSTOOD)) return null;
-    const line = { itemId: it.itemId, qty: it.qty };
-    if (it.extras !== undefined) {
-      if (!Array.isArray(it.extras) || !it.extras.every(e => extras.has(e))) return null;
-      if (it.extras.length) line.extras = [...new Set(it.extras)].sort();
-    }
-    if (it.note !== undefined) {
-      if (typeof it.note !== 'string' || it.note.length > MAX_NOTE_LENGTH) return null;
-      const note = it.note.trim().replace(/\s+/g, ' ');
-      if (note) line.note = note;
-    }
+    const line = cleanLine(restaurant, it);
+    if (!line) return null;
     out.push(line);
   }
   return out;
@@ -101,6 +120,11 @@ export function validateIntent(restaurant, intent, { source } = {}) {
     case 'add_items': {
       const items = validateItems(restaurant, intent.items);
       return items ? { type, items } : null;
+    }
+    case 'remove_item': {
+      if (!restaurant.menu.some(m => m.id === intent.itemId)) return null;
+      if (intent.qty === undefined) return { type, itemId: intent.itemId };
+      return isInt(intent.qty, 1, MAX_QTY_UNDERSTOOD) ? { type, itemId: intent.itemId, qty: intent.qty } : null;
     }
     default:
       // Sin campos: cancel, menu, start_order, view_cart, add_more, checkout, clear_cart,
