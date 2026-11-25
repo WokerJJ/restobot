@@ -9,7 +9,7 @@
 import { priceOrder, describeOrder, formatCOP } from '../pricing.js';
 import { STATES, MAX_QTY } from './states.js';
 import { interpret, normalize } from './interpret.js';
-import { validateIntent, cleanLine } from './intents.js';
+import { validateIntent, cleanLine, MAX_NOTE_LENGTH } from './intents.js';
 
 // Se reexportan para quien ya los importaba desde aquí.
 export { STATES, MAX_QTY, normalize };
@@ -270,13 +270,39 @@ function removeFromCart(cart, itemId, qty = Infinity) {
   return { cart: next, removed: units(cart) - units(next) };
 }
 
+// Un aviso por cada línea que el contrato rechazó (EVA-022), todos en un mensaje. mention ya
+// viene limpia y recortada de validateIntent.
+function rejectedNotices(r, rejected = []) {
+  if (!rejected.length) return [];
+  const extraName = id => (r.extras || []).find(e => e.id === id)?.name;
+  const lines = rejected.map(x => {
+    const name = x.itemId ? itemName(r, x.itemId) : null;
+    switch (x.reason) {
+      case 'producto':
+        return x.mention ? `No tenemos «${x.mention}» en la carta.` : 'Uno de los productos no está en la carta.';
+      case 'extra': {
+        const extra = extraName(x.extraId) ?? (x.mention ? `«${x.mention}»` : 'ese adicional');
+        return `${name ?? 'Ese producto'} no lleva ${extra}.`;
+      }
+      case 'cantidad':
+        return `Revisa la cantidad de ${name ?? 'ese producto'}.`;
+      default:
+        return `La nota de ${name ?? 'ese producto'} es muy larga (máximo ${MAX_NOTE_LENGTH} caracteres).`;
+    }
+  });
+  return splitText(lines.join('\n')).map(text);
+}
+
 // add_items desde un paso donde se está armando el pedido: el carrito resultante se muestra
 // para que el cliente lo revise. Si se pasa de un tope, se queda en el mismo paso con el aviso.
-function applyAddItems(r, state, data, items) {
+// Las líneas rechazadas se avisan antes; si no quedó ninguna válida, se repite el paso actual.
+function applyAddItems(r, state, data, items, rejected) {
+  const notices = rejectedNotices(r, rejected);
+  if (!items.length) return go(r, state, data, notices);
   const res = addLines(r, data.cart, items);
-  if (res.error) return go(r, state, data, [text(res.error)]);
+  if (res.error) return go(r, state, data, [...notices, text(res.error)]);
   const { pending, ...rest } = data;
-  return go(r, S.CARRITO, { ...rest, cart: res.cart });
+  return go(r, S.CARRITO, { ...rest, cart: res.cart }, notices);
 }
 
 function applyRemoveItem(r, state, data, intent) {
@@ -294,7 +320,7 @@ function applyRemoveItem(r, state, data, intent) {
 const handlers = {
   [S.SALUDO](r, data, intent) {
     if (intent.type === 'start_order') return go(r, S.MENU, { ...data, menuPage: 1 });
-    if (intent.type === 'add_items') return applyAddItems(r, S.SALUDO, data, intent.items);
+    if (intent.type === 'add_items') return applyAddItems(r, S.SALUDO, data, intent.items, intent.rejected);
     return null;
   },
 
@@ -304,14 +330,14 @@ const handlers = {
     if (intent.type === 'select_item' && r.menu.some(m => m.id === intent.itemId)) {
       return go(r, S.CANTIDAD, { ...data, pending: intent.itemId });
     }
-    if (intent.type === 'add_items') return applyAddItems(r, S.MENU, data, intent.items);
+    if (intent.type === 'add_items') return applyAddItems(r, S.MENU, data, intent.items, intent.rejected);
     if (intent.type === 'remove_item') return applyRemoveItem(r, S.MENU, data, intent);
     return null;
   },
 
   [S.CANTIDAD](r, data, intent) {
     // "dos perros y una gaseosa" en vez de la cantidad: vale como pedido completo.
-    if (intent.type === 'add_items') return applyAddItems(r, S.CANTIDAD, data, intent.items);
+    if (intent.type === 'add_items') return applyAddItems(r, S.CANTIDAD, data, intent.items, intent.rejected);
     if (intent.type !== 'quantity' || !Number.isInteger(intent.qty) || intent.qty < 1) return null;
     return applyAddItems(r, S.CANTIDAD, data, [{ itemId: data.pending, qty: intent.qty }]);
   },
@@ -320,7 +346,7 @@ const handlers = {
     if (intent.type === 'add_more') return go(r, S.MENU, { ...data, menuPage: 1 });
     if (intent.type === 'checkout') return go(r, S.ZONA, data);
     if (intent.type === 'clear_cart') return go(r, S.MENU, { ...data, cart: [], menuPage: 1 }, [text('🗑️ Vacié tu carrito.')]);
-    if (intent.type === 'add_items') return applyAddItems(r, S.CARRITO, data, intent.items);
+    if (intent.type === 'add_items') return applyAddItems(r, S.CARRITO, data, intent.items, intent.rejected);
     if (intent.type === 'remove_item') return applyRemoveItem(r, S.CARRITO, data, intent);
     return null;
   },
@@ -409,11 +435,16 @@ export function step(restaurant, session, msg, { intent } = {}) {
 
   if (state === S.INICIO) {
     // "Buenas, me regala 2 salchipapas" como primer mensaje: se saluda y se arma el pedido.
-    // Si se pasa de un tope, se saluda con el aviso: el pedido no desaparece en silencio.
+    // Si se pasa de un tope o no quedó ninguna línea válida, se saluda con los avisos: el
+    // pedido no desaparece en silencio.
     if (it?.type === 'add_items') {
+      const notices = rejectedNotices(restaurant, it.rejected);
       const res = addLines(restaurant, [], it.items);
-      if (res.error) return { state: S.SALUDO, data: { cart: [] }, replies: [text(res.error), ...greeting(restaurant, msg.name)] };
-      return go(restaurant, S.CARRITO, { cart: res.cart }, [text(welcome(restaurant, msg.name))]);
+      if (res.error || !res.cart.length) {
+        const replies = [...notices, ...(res.error ? [text(res.error)] : []), ...greeting(restaurant, msg.name)];
+        return { state: S.SALUDO, data: { cart: [] }, replies };
+      }
+      return go(restaurant, S.CARRITO, { cart: res.cart }, [text(welcome(restaurant, msg.name)), ...notices]);
     }
     return { state: S.SALUDO, data: { cart: [] }, replies: greeting(restaurant, msg.name) };
   }

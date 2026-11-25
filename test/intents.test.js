@@ -46,11 +46,43 @@ test('add_items valida cada línea: producto, cantidad, extras y nota', () => {
     ] }
   );
   assert.equal(v({ type: 'add_items', items: [] }), null);
-  assert.equal(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, extras: ['caviar'] }] }), null);
-  assert.equal(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, note: 'x'.repeat(141) }] }), null);
-  assert.equal(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1 }, { itemId: 'pizza', qty: 1 }] }), null,
-    'una línea inválida invalida toda la intención');
+  assert.deepEqual(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, extras: ['caviar'] }] }),
+    { type: 'add_items', items: [], rejected: [{ reason: 'extra', mention: null, itemId: 'perro' }] });
+  assert.deepEqual(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, note: 'x'.repeat(141) }] }),
+    { type: 'add_items', items: [], rejected: [{ reason: 'nota', mention: null, itemId: 'perro' }] });
   assert.equal(v({ type: 'add_items', items: Array.from({ length: 21 }, () => ({ itemId: 'perro', qty: 1 })) }), null);
+});
+
+test('add_items valida cada línea por separado y devuelve las rechazadas con su motivo (EVA-022)', () => {
+  const mixto = v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, mention: 'un perro' }, { itemId: 'pizza', qty: 1, mention: 'una pizza' }] });
+  assert.deepEqual(mixto, { type: 'add_items', items: [{ itemId: 'perro', qty: 1 }], rejected: [{ reason: 'producto', mention: 'una pizza' }] },
+    'una línea inválida ya no anula el lote');
+  assert.deepEqual(v(mixto), mixto, 'validar dos veces da lo mismo');
+
+  const todoMal = v({ type: 'add_items', items: [
+    { itemId: 'gaseosa', qty: 1, extras: ['queso'] },
+    { itemId: 'perro', qty: 0 },
+    { itemId: 'perro', qty: 1, note: 'x'.repeat(141) },
+    { itemId: 'pizza', qty: 1 }
+  ] });
+  assert.deepEqual(todoMal, { type: 'add_items', items: [], rejected: [
+    { reason: 'extra', mention: null, itemId: 'gaseosa', extraId: 'queso' },
+    { reason: 'cantidad', mention: null, itemId: 'perro' },
+    { reason: 'nota', mention: null, itemId: 'perro' },
+    { reason: 'producto', mention: null }
+  ] }, 'sin líneas válidas pero con rechazadas, la intención vale con items vacío');
+  assert.deepEqual(v(todoMal), todoMal);
+
+  const sucia = v({ type: 'add_items', items: [{ itemId: 'pizza', qty: 1, mention: 'piz‮za\n  ' + 'x'.repeat(300) }] });
+  assert.deepEqual(sucia.rejected, [{ reason: 'producto', mention: ('piz za ' + 'x'.repeat(300)).slice(0, 40) }]);
+
+  // La forma del lote sigue siendo estricta.
+  for (const items of [[], undefined, 'perro', {}, [null], [1], Array.from({ length: 21 }, () => ({ itemId: 'pizza', qty: 1 }))]) {
+    assert.equal(v({ type: 'add_items', items }), null, JSON.stringify(items));
+  }
+  for (const rejected of ['x', [null], [{ reason: 'otro' }], Array.from({ length: 21 }, () => ({ reason: 'producto' }))]) {
+    assert.equal(v({ type: 'add_items', items: [], rejected }), null, JSON.stringify(rejected));
+  }
 });
 
 test('todo lo que producen las reglas cumple el contrato', () => {
@@ -91,7 +123,8 @@ test('con source "ia" solo pasan las intenciones que la IA puede producir (EVA-0
 test('add_items solo acepta los extras que cada producto admite (EVA-002)', () => {
   assert.deepEqual(v({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, extras: ['queso'] }] }),
     { type: 'add_items', items: [{ itemId: 'perro', qty: 1, extras: ['queso'] }] });
-  assert.equal(v({ type: 'add_items', items: [{ itemId: 'gaseosa', qty: 1, extras: ['queso'] }] }), null,
+  assert.deepEqual(v({ type: 'add_items', items: [{ itemId: 'gaseosa', qty: 1, extras: ['queso'] }] }),
+    { type: 'add_items', items: [], rejected: [{ reason: 'extra', mention: null, itemId: 'gaseosa', extraId: 'queso' }] },
     'la gaseosa no admite queso');
 });
 

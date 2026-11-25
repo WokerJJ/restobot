@@ -524,3 +524,65 @@ test('splitText parte entre líneas y respeta el límite', async () => {
   assert.equal(partes.join('\n'), body, 'no se pierde ni se parte ninguna línea');
   assert.deepEqual(splitText('x'.repeat(25), 10), ['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)]);
 });
+
+describe('líneas rechazadas de add_items (EVA-022)', () => {
+  const add = (items, rejected) => ({ intent: { type: 'add_items', items, ...(rejected ? { rejected } : {}) } });
+
+  test('un lote mixto agrega lo válido y avisa lo que no está en la carta', () => {
+    const res = step(r, ses(S.MENU), txt('un perro y una pizza'),
+      add([{ itemId: 'perro', qty: 1 }, { itemId: 'pizza', qty: 1, mention: 'pizza hawaiana' }]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'perro', qty: 1 }]);
+    assert.equal(res.replies[0].body, 'No tenemos «pizza hawaiana» en la carta.');
+    assert.doesNotMatch(bodies(res), /No te entendí/);
+  });
+
+  test('un lote todo inválido avisa, no dice "no entendí" y no cambia el carrito', () => {
+    const antes = conCarrito(S.CARRITO);
+    const res = step(r, antes, txt('x'), add([
+      { itemId: 'gaseosa', qty: 1, extras: ['queso'] },
+      { itemId: 'perro', qty: 1, extras: ['caviar'], mention: 'caviar' },
+      { itemId: 'perro', qty: 1, extras: ['caviar'] },
+      { itemId: 'perro', qty: 0 },
+      { itemId: 'perro', qty: 1, note: 'x'.repeat(141) },
+      { itemId: 'pizza', qty: 1 }
+    ]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, antes.data.cart);
+    assert.equal(res.replies[0].body, [
+      'Gaseosa 400 ml no lleva Queso extra.',
+      'Perro sencillo no lleva «caviar».',
+      'Perro sencillo no lleva ese adicional.',
+      'Revisa la cantidad de Perro sencillo.',
+      'La nota de Perro sencillo es muy larga (máximo 140 caracteres).',
+      'Uno de los productos no está en la carta.'
+    ].join('\n'));
+    assert.match(bodies(res), /Tu pedido:/, 'se vuelve a mostrar el paso');
+    assert.doesNotMatch(bodies(res), /No te entendí/);
+    assert.equal(res.data.misses, 0);
+  });
+
+  test('en el menú, todo inválido se queda en el menú con el aviso', () => {
+    const res = step(r, ses(S.MENU), txt('x'), add([{ itemId: 'pizza', qty: 1, mention: 'pizza' }]));
+    assert.equal(res.state, S.MENU);
+    assert.equal(res.replies[0].body, 'No tenemos «pizza» en la carta.');
+    assert.equal(res.replies[1].kind, 'list');
+  });
+
+  test('en inicio, todo inválido da los avisos y el saludo completo', () => {
+    const res = step(r, null, { ...txt('una pizza hawaiana'), name: 'Ana' }, add([{ itemId: 'pizza', qty: 1, mention: 'pizza hawaiana' }]));
+    assert.equal(res.state, S.SALUDO);
+    assert.deepEqual(res.data.cart, []);
+    assert.equal(res.replies[0].body, 'No tenemos «pizza hawaiana» en la carta.');
+    assert.match(bodies(res), /¡Hola, Ana!.*Horario/s);
+    assert.deepEqual(ids(res), ['menu', 'human']);
+  });
+
+  test('en inicio, un lote mixto saluda, avisa y arma el carrito con lo válido', () => {
+    const res = step(r, null, txt('x'), add([{ itemId: 'salchipapa', qty: 2 }, { itemId: 'pizza', qty: 1, mention: 'pizza' }]));
+    assert.equal(res.state, S.CARRITO);
+    assert.deepEqual(res.data.cart, [{ itemId: 'salchipapa', qty: 2 }]);
+    assert.match(res.replies[0].body, /Bienvenido/);
+    assert.equal(res.replies[1].body, 'No tenemos «pizza» en la carta.');
+  });
+});

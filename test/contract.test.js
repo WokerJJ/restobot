@@ -109,6 +109,11 @@ test('todas las respuestas del flujo respetan los límites de la Cloud API', () 
       const m = r.menu.at(-1);
       for (const intent of [
         { type: 'add_items', items: [{ itemId: m.id, qty: 1, extras: m.extras, note: largo('bien tostado por favor', 140) }] },
+        // Líneas rechazadas (EVA-022): con una válida y sin ninguna, con todos los motivos.
+        ...[[{ itemId: m.id, qty: 1 }], []].map(validas => ({ type: 'add_items', items: [...validas,
+          ...Array.from({ length: 4 }, () => ({ itemId: 'no-existe', qty: 1, mention: largo('pizza', 300) })),
+          { itemId: m.id, qty: 0 }, { itemId: m.id, qty: 1, extras: ['no-existe'], mention: largo('caviar', 300) },
+          { itemId: m.id, qty: 1, note: largo('nota', 141) }] })),
         { type: 'remove_item', itemId: m.id, qty: 1 },
         { type: 'remove_item', itemId: r.menu[0].id }
       ]) {

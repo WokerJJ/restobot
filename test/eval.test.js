@@ -145,3 +145,17 @@ test('checkCase rechaza una forma de nota vacía: para "sin nota" se omite note 
   assert.equal(problemas.length, 1);
   assert.match(problemas[0], /nota vacía/);
 });
+
+test('las líneas rechazadas se comparan solo por el multiconjunto de motivos (EVA-022)', () => {
+  const perro = [{ itemId: 'perro', qty: 1 }];
+  const intent = (items, rejected) => ({ type: 'add_items', items, ...(rejected ? { rejected } : {}) });
+  const rech = (...reasons) => reasons.map(reason => ({ reason, mention: `dijo ${reason}` }));
+  assert.ok(matches(intent(perro, rech('producto')), intent(perro, [{ reason: 'producto' }])), 'mention no cuenta');
+  assert.ok(matches(intent([], rech('extra', 'producto')), intent([], [{ reason: 'producto' }, { reason: 'extra' }])), 'sin importar el orden');
+  assert.ok(!matches(intent(perro, rech('producto')), intent(perro)), 'esperado sin rejected equivale a []');
+  assert.ok(!matches(intent(perro), intent(perro, [{ reason: 'producto' }])));
+  assert.ok(!matches(intent(perro, rech('producto', 'producto')), intent(perro, [{ reason: 'producto' }])));
+  assert.ok(!matches(intent(perro, rech('extra')), intent(perro, [{ reason: 'producto' }])));
+  assert.ok(matches(intent(perro, []), intent(perro)));
+  assert.deepEqual(checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado: intent([], [{ reason: 'producto' }]) }), []);
+});

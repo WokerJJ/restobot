@@ -88,6 +88,12 @@ function sameItems(actual, expected) {
   return true;
 }
 
+// Las líneas rechazadas (EVA-022) se comparan solo por el multiconjunto de motivos: mention es
+// lo que dijo el cliente con las palabras que elija el intérprete, y no se califica. Sin
+// rejected equivale a [].
+const reasons = rejected => (rejected || []).map(x => x.reason).sort();
+const sameReasons = (actual, expected) => isDeepStrictEqual(reasons(actual), reasons(expected));
+
 /** ¿La intención obtenida (ya validada) coincide con la esperada? */
 export function matches(actual, expected) {
   if (expected === null) return actual === null;
@@ -98,7 +104,7 @@ export function matches(actual, expected) {
     case 'human':
       return true;
     case 'add_items':
-      return sameItems(actual.items, expected.items);
+      return sameItems(actual.items, expected.items) && sameReasons(actual.rejected, expected.rejected);
     case 'address':
       return sameAddress(actual.text, expected.text);
     default:
