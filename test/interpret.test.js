@@ -70,18 +70,19 @@ test('step valida la intención dada: una mal formada se trata como "no entendí
   assert.equal(address.state, S.DIRECCION);
   assert.equal(address.data.address, undefined);
 
-  // Sin motivo ya no deriva con reason undefined: la intención externa es de la IA, así que el
-  // motivo queda en 'ia' (EVA-013).
+  // Sin motivo ya no deriva con reason undefined (EVA-013); y desde BUG-024, un human de la IA
+  // no deriva: ofrece el botón.
   const human = step(r, { state: S.MENU, data: { cart: [] } }, txt('x'), { intent: { type: 'human' } });
-  assert.equal(human.state, S.HUMANO);
-  assert.deepEqual(human.handoff, { reason: 'ia' });
+  assert.equal(human.state, S.MENU);
+  assert.equal(human.handoff, undefined);
 });
 
-test('la IA puede derivar a una persona: step la deja con motivo "ia" aunque diga otro', () => {
+test('la IA no deriva por su cuenta aunque diga via "boton": ofrece el botón (BUG-024)', () => {
   const res = step(r, { state: S.MENU, data: { cart: [] } }, txt('me comunican con alguien de verdad?'),
     { intent: { type: 'human', via: 'boton' } });
-  assert.equal(res.state, S.HUMANO);
-  assert.deepEqual(res.handoff, { reason: 'ia' });
+  assert.equal(res.state, S.MENU);
+  assert.equal(res.handoff, undefined);
+  assert.equal(res.replies.at(-1).buttons[0].id, 'human');
   assert.equal(step(r, { state: S.MENU, data: { cart: [] } }, txt('x'), { intent: { type: 'media', kind: 'audio' } }).state, S.MENU,
     'la IA no puede producir media');
 });

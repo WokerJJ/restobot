@@ -67,7 +67,7 @@ function sesiones(r) {
 }
 
 function mensajes(r, state) {
-  const comunes = [txt('hola'), txt('asdf'), btn('human'), { type: 'audio' }, { type: 'unsupported' }, txt('menú'), txt('cancelar')];
+  const comunes = [txt('hola'), txt('asdf'), btn('human'), btn('continue'), { type: 'audio' }, { type: 'unsupported' }, txt('menú'), txt('cancelar')];
   const propios = {
     [S.SALUDO]: [btn('menu')],
     [S.MENU]: [btn('item:p0'), btn('menu:page:2'), btn('menu:page:3'), btn('cart:view')],
@@ -105,9 +105,11 @@ test('todas las respuestas del flujo respetan los límites de la Cloud API', () 
           if (res.order) revisar(`${donde} (confirmado)`, confirmedReplies(r, 123_456, res.order));
         }
       }
-      // Intenciones que solo llegan desde la IA: agregar y quitar productos.
+      // Intenciones que solo llegan desde la IA: agregar y quitar productos, y las acciones
+      // irreversibles que piden un toque (BUG-024).
       const m = r.menu.at(-1);
       for (const intent of [
+        { type: 'confirm' }, { type: 'cancel' }, { type: 'clear_cart' }, { type: 'human' },
         { type: 'add_items', items: [{ itemId: m.id, qty: 1, extras: m.extras, note: largo('bien tostado por favor', 140) }] },
         // Líneas rechazadas (EVA-022): con una válida y sin ninguna, con todos los motivos.
         ...[[{ itemId: m.id, qty: 1 }], []].map(validas => ({ type: 'add_items', items: [...validas,

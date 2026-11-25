@@ -421,14 +421,18 @@ test('si la IA falla, el cliente recibe "no entendí" y el log no expone el tel�
   assert.ok(aviso && !aviso.includes(CLIENTE));
 });
 
-test('una derivación pedida por la IA queda con motivo "ia" y avisa al local', async () => {
+test('una derivación que entiende la IA ofrece el botón; solo el toque deriva y avisa al local (BUG-024)', async () => {
   const avisos = [];
   const ai = fakeAI({ 'me comunican con alguien de verdad?': { type: 'human', via: 'boton' } });
-  const { store, say } = setup({ interpretAI: ai, notifyHandoff: async h => { avisos.push(h.reason); return true; } });
+  const { store, client, say, tap } = setup({ interpretAI: ai, notifyHandoff: async h => { avisos.push(h.reason); return true; } });
   await say('hola');
   await say('me comunican con alguien de verdad?');
+  assert.equal(store.getSession(CLIENTE).state, 'saludo');
+  assert.deepEqual(avisos, []);
+  assert.ok(client.sent.at(-1).rest[0].some(b => b.id === 'human'), 'ofrece el botón');
+  await tap('human');
   assert.equal(store.getSession(CLIENTE).state, 'humano');
-  assert.deepEqual(avisos, ['ia']);
+  assert.deepEqual(avisos, ['boton']);
 });
 
 test('una intención de la IA fuera de lugar o inválida no avanza ni confirma', async () => {

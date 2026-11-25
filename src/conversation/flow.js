@@ -400,6 +400,41 @@ const handlers = {
   }
 };
 
+// Confirmar, cancelar, vaciar el carrito y derivar no se deshacen. Cuando las decide un modelo
+// (opts.intent) no se aplican: el bot muestra el botón y la acción ocurre solo si el cliente lo
+// toca (BUG-024). Un modelo puede leer "sí, pero el perro sin cebolla" como confirm y crear el
+// pedido sin la indicación; el prompt lo desaconseja, pero no lo garantiza. Un toque explícito
+// sí. Los botones y las frases inequívocas de las reglas ("cancelar", "sí") se aplican directo.
+// Devuelve null si la intención no es una de estas o está fuera de lugar (confirm fuera de la
+// confirmación, clear_cart fuera del carrito): el handler la tratará como "no entendí".
+function askToTap(restaurant, state, data, intent) {
+  switch (intent.type) {
+    case 'confirm':
+      return state === S.CONFIRMACION ? go(restaurant, state, data, [text('Para confirmar tu pedido, toca *Confirmar* 👇')]) : null;
+    case 'clear_cart':
+      return state === S.CARRITO ? go(restaurant, state, data, [text('Para vaciar tu carrito, toca *Vaciar carrito* 👇')]) : null;
+    case 'cancel': {
+      const units = (data.cart || []).reduce((n, l) => n + l.qty, 0);
+      const lost = units ? `Se borra tu pedido (${units} producto(s)) y empezamos de nuevo.` : 'Empezamos de nuevo desde el inicio.';
+      const res = go(restaurant, state, data);
+      // "No, seguir" (continue) solo vuelve a mostrar el paso: no cambia nada en ningún estado.
+      return { ...res, replies: [...res.replies, { kind: 'buttons', body: `¿Cancelamos? ${lost}`, buttons: [
+        { id: 'cancel', title: 'Sí, cancelar' }, { id: 'continue', title: 'No, seguir' }
+      ] }] };
+    }
+    case 'human': {
+      const res = go(restaurant, state, data);
+      // En el saludo el paso ya trae el botón: basta con señalarlo.
+      if (res.replies.some(x => x.buttons?.some(b => b.id === HUMAN_BUTTON.id))) {
+        return { ...res, replies: [text('Para hablar con una persona, toca *Hablar con persona* 👇'), ...res.replies] };
+      }
+      return { ...res, replies: [...res.replies, { kind: 'buttons', body: 'Para hablar con una persona del equipo, toca el botón 👇', buttons: [HUMAN_BUTTON] }] };
+    }
+    default:
+      return null;
+  }
+}
+
 function miss(restaurant, state, data) {
   const misses = (data.misses || 0) + 1;
   const replies = [text('No te entendí 🤔. Usa las opciones de abajo, por favor.'), ...prompt(restaurant, state, data)];
@@ -428,15 +463,17 @@ export function step(restaurant, session, msg, { intent } = {}) {
   const { data, dropped } = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
   // Una intención que llega de fuera no se aplica a ciegas: pasa por el contrato (BUG-013).
   // Solo la IA le pasa intenciones a step (las reglas corren aquí dentro), así que se valida
-  // como salida de la IA: sin media ni menu_page, y una derivación queda con motivo 'ia'.
+  // como salida de la IA: sin media ni menu_page, y human queda con via 'ia'.
   // Validar dos veces da lo mismo, así que bot.js puede validar antes sin conflicto.
-  const it = intent !== undefined
+  const fromAI = intent !== undefined;
+  const it = fromAI
     ? validateIntent(restaurant, intent, { source: 'ia' })
     : interpret(restaurant, state, msg);
 
-  // Intenciones globales, válidas en cualquier estado.
-  if (it?.type === 'human') return handoff(restaurant, data, it.via);
-  if (it?.type === 'cancel') {
+  // Intenciones globales, válidas en cualquier estado. Derivar y cancelar decididos por la IA no
+  // se aplican aquí: piden un toque más abajo (askToTap), y en el inicio solo se saluda.
+  if (it?.type === 'human' && !fromAI) return handoff(restaurant, data, it.via);
+  if (it?.type === 'cancel' && !fromAI) {
     return { state: S.INICIO, data: {}, replies: [text('Listo, cancelé el pedido. Escríbeme cuando quieras empezar de nuevo.')] };
   }
   if (it?.type === 'media') {
@@ -472,6 +509,9 @@ export function step(restaurant, session, msg, { intent } = {}) {
 
   // Si la sesión quedó incoherente (p. ej. cambió el menú), se reubica antes de interpretar.
   if (guard(state, data) !== state) return go(restaurant, state, data, notice);
-  const res = (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data);
+  // "No, seguir" tras la pregunta de cancelar: se vuelve a mostrar el paso, sin cambiar nada.
+  if (it?.type === 'continue') return go(restaurant, state, data, notice);
+  const asked = it && fromAI ? askToTap(restaurant, state, data, it) : null;
+  const res = asked || (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data);
   return notice.length ? { ...res, replies: [...notice, ...res.replies] } : res;
 }

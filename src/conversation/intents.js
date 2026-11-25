@@ -19,6 +19,7 @@
 //   { type: 'address', text }                     5 a 200 caracteres
 //   { type: 'payment', index }                    índice en restaurant.payments
 //   { type: 'confirm' } | { type: 'edit' }
+//   { type: 'continue' }                          botón "No, seguir": vuelve a mostrar el paso actual
 //   { type: 'add_items', items: [{ itemId, qty, extras?: [extraId], note? }],
 //     rejected?: [{ reason, mention, itemId?, extraId? }] }
 //        extras: solo los que el producto admite (menu[].extras); note: hasta 140 caracteres.
@@ -44,17 +45,17 @@
 // Reservada para la IA; flow.js todavía no la aplica (la trata como "no entendí"):
 //   { type: 'question', topic: 'horario' | 'zonas' | 'pagos' | 'tiempo' | 'otro' }
 //
-// Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio y
-// menu_page de un botón, nunca de texto. En human se ignora el via que traiga y queda
+// Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio, y
+// menu_page y continue de un botón, nunca de texto. En human se ignora el via que traiga y queda
 // via: 'ia', para que el motivo de la derivación (log y aviso al local) no se pueda falsear.
 
 export const INTENT_TYPES = Object.freeze([
   'human', 'cancel', 'menu', 'media', 'start_order', 'select_item', 'menu_page', 'view_cart',
   'quantity', 'add_more', 'checkout', 'clear_cart', 'zone', 'pickup', 'address', 'payment',
-  'confirm', 'edit', 'add_items', 'remove_item', 'question'
+  'confirm', 'edit', 'add_items', 'remove_item', 'question', 'continue'
 ]);
-// Lo que puede devolver un modelo de IA: todo menos media y menu_page.
-export const AI_INTENT_TYPES = Object.freeze(INTENT_TYPES.filter(t => t !== 'media' && t !== 'menu_page'));
+// Lo que puede devolver un modelo de IA: todo menos media, menu_page y continue.
+export const AI_INTENT_TYPES = Object.freeze(INTENT_TYPES.filter(t => !['media', 'menu_page', 'continue'].includes(t)));
 export const QUESTION_TOPICS = Object.freeze(['horario', 'zonas', 'pagos', 'tiempo', 'otro']);
 export const MAX_ITEMS_PER_INTENT = 20;
 // Una cantidad "entendida" puede pasar del tope por producto (MAX_QTY): es mejor responder
@@ -197,7 +198,7 @@ export function validateIntent(restaurant, intent, { source } = {}) {
     }
     default:
       // Sin campos: cancel, menu, start_order, view_cart, add_more, checkout, clear_cart,
-      // pickup, confirm, edit.
+      // pickup, confirm, edit, continue.
       return { type };
   }
 }

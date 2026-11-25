@@ -7,7 +7,7 @@
 // Intenciones que produce (todas con un campo `type`):
 //   human {via} · cancel · menu · media {kind} · start_order · select_item {itemId}
 //   menu_page {page} · view_cart · quantity {qty} · add_more · checkout · clear_cart
-//   zone {zoneId} · pickup · address {text} · payment {index} · confirm · edit
+//   zone {zoneId} · pickup · address {text} · payment {index} · confirm · edit · continue
 
 import { STATES as S } from './states.js';
 
@@ -60,7 +60,8 @@ function fromButton(id) {
     'cart:clear': { type: 'clear_cart' },
     'cart:edit': { type: 'edit' },
     pickup: { type: 'pickup' },
-    confirm: { type: 'confirm' }
+    confirm: { type: 'confirm' },
+    continue: { type: 'continue' }
   };
   if (fixed[id]) return fixed[id];
   let m;
