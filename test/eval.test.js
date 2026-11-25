@@ -43,3 +43,19 @@ test('evaluate valida la salida del intérprete y cuenta errores como no entendi
   assert.equal(caido.ok, false);
   assert.equal(caido.error, 'modelo caído');
 });
+
+test('las direcciones se comparan en orden y las notas no aceptan otro sentido (BUG-014, BUG-015)', () => {
+  const dir = text => ({ type: 'address', text });
+  assert.ok(matches(dir('  calle 20  # 10-15 '), dir('Calle 20 # 10-15')));
+  assert.ok(!matches(dir('Calle 10 # 20-15'), dir('Calle 20 # 10-15')), 'números permutados');
+  assert.ok(!matches(dir('Calle 10 # 15'), dir('Calle 10 # 10-15')), 'falta un número');
+
+  const nota = note => ({ type: 'add_items', items: [{ itemId: 'perro', qty: 1, note }] });
+  assert.ok(matches(nota('sin salsa de piña'), nota('sin piña')));
+  assert.ok(matches(nota('sin piña'), nota('sin salsa de piña')));
+  assert.ok(!matches(nota('con piña, sin cebolla'), nota('sin piña')), 'sentido invertido');
+  assert.ok(!matches(nota('piña sin'), nota('sin piña')), 'orden distinto');
+  assert.ok(!matches(nota('sin piña bien fría'), nota('sin piña')), 'palabras de más');
+  assert.ok(!matches(nota('bien fría'), nota('sin piña')));
+  assert.ok(!matches(nota('bien fría'), { type: 'add_items', items: [{ itemId: 'perro', qty: 1 }] }), 'nota inventada');
+});

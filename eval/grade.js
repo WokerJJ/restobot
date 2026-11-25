@@ -18,18 +18,24 @@ export function loadCases(path = CASES_PATH) {
 }
 
 const words = s => normalize(s).split(' ').filter(Boolean);
-// Las notas y direcciones se comparan por palabras: "sin piña" acepta "sin salsa de piña",
-// pero no al revés ni una nota inventada.
-const coversWords = (actual, expected) => {
-  const have = new Set(words(actual));
-  return words(expected).every(w => have.has(w));
-};
+// Una dirección se compara como la secuencia completa de palabras normalizadas (sin tildes,
+// signos ni espacios de más): el orden importa, porque "Calle 20 # 10-15" y "Calle 10 # 20-15"
+// son dos casas distintas.
+const sameAddress = (actual, expected) => words(actual).join(' ') === words(expected).join(' ');
+// Una nota se compara por sus palabras de contenido, en orden y sin palabras de más. Antes se
+// quitan las de relleno de NOTE_FILLER, que no cambian lo que se pide: así "sin piña" y
+// "sin salsa de piña" se aceptan entre sí, pero "con piña, sin cebolla" (otro sentido) o
+// "sin piña bien fría" (algo que no se pidió) no. "sin" y "con" nunca son relleno.
+// Es una lista corta y explícita a propósito: cada palabra que se agrega la hace más permisiva.
+const NOTE_FILLER = new Set(['de', 'del', 'el', 'la', 'los', 'las', 'un', 'una', 'y', 'salsa']);
+const noteContent = s => words(s).filter(w => !NOTE_FILLER.has(w)).join(' ');
+const sameNote = (actual, expected) => noteContent(actual) === noteContent(expected);
 
 function sameLine(a, e) {
   if (a.itemId !== e.itemId || a.qty !== e.qty) return false;
   if (!isDeepStrictEqual(a.extras || [], [...(e.extras || [])].sort())) return false;
   if (!e.note) return !a.note;
-  return Boolean(a.note) && coversWords(a.note, e.note);
+  return Boolean(a.note) && sameNote(a.note, e.note);
 }
 
 // Las líneas se emparejan sin importar el orden: "una gaseosa y dos perros" es lo mismo
@@ -53,7 +59,7 @@ export function matches(actual, expected) {
     case 'add_items':
       return sameItems(actual.items, expected.items);
     case 'address':
-      return coversWords(actual.text, expected.text) && coversWords(expected.text, actual.text);
+      return sameAddress(actual.text, expected.text);
     default:
       return isDeepStrictEqual(actual, expected);
   }
