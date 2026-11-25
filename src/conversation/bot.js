@@ -101,10 +101,13 @@ export function createBot({
     // La IA solo recibe texto que las reglas no entienden: los botones, el audio y las frases
     // simples van por reglas, sin costo ni espera. Si la IA falla, se sigue como si no hubiera
     // entendido. step valida su intención con el contrato de la IA antes de aplicarla.
+    // En la dirección tampoco (BUG-022): ahí el texto es solo la dirección, y si las reglas no
+    // la aceptan es por su largo, que la IA no arregla. Llamarla solo arriesga que una dirección
+    // reescrita (o un cancel) reemplace lo que el cliente escribió, y manda la dirección a un tercero.
     let intent;
     if (interpretAI && msg.type === 'text') {
       const state = Object.values(STATES).includes(session?.state) ? session.state : STATES.INICIO;
-      if (state !== STATES.HUMANO && interpret(restaurant, state, msg) === null) {
+      if (state !== STATES.HUMANO && state !== STATES.DIRECCION && interpret(restaurant, state, msg) === null) {
         try {
           intent = (await interpretAI(restaurant, state, msg, { data: session?.data || {} })) ?? null;
         } catch (err) {

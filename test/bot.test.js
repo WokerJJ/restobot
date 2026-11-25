@@ -451,6 +451,28 @@ test('una intención de la IA fuera de lugar o inválida no avanza ni confirma',
   assert.deepEqual(cart, [{ itemId: 'perro', qty: 1 }], 'los campos inventados se descartan; el precio sale de pricing.js');
 });
 
+test('en la dirección no se llama a la IA: el texto no sale ni se reescribe (BUG-022)', async () => {
+  const ai = fakeAI({ 'cl1': { type: 'cancel' }, [ 'x'.repeat(250) ]: { type: 'address', text: 'Calle inventada # 1-2' } });
+  const { store, say, tap } = setup({ interpretAI: ai });
+  await tap('menu');
+  await tap('menu');
+  await tap('item:perro');
+  await tap('qty:1');
+  await tap('cart:checkout');
+  await tap('zone:centro');
+  assert.equal(store.getSession(CLIENTE).state, 'direccion');
+  await say('cl1');
+  await say('x'.repeat(250));
+  assert.equal(ai.calls.length, 0);
+  const s = store.getSession(CLIENTE);
+  assert.equal(s.state, 'direccion');
+  assert.equal(s.data.address, undefined);
+  assert.deepEqual(s.data.cart, [{ itemId: 'perro', qty: 1 }]);
+  await say('Calle 10 # 5-20');
+  assert.equal(store.getSession(CLIENTE).state, 'pago');
+  assert.equal(ai.calls.length, 0);
+});
+
 test('mientras atiende una persona, la IA no se llama', async () => {
   const ai = fakeAI();
   const { say } = setup({ interpretAI: ai });

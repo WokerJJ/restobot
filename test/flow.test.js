@@ -115,6 +115,21 @@ describe('entrega, pago y confirmación', () => {
     assert.equal(step(r, conCarrito(S.DIRECCION, { zoneId: 'centro' }), btn('pay:0')).state, S.DIRECCION);
   });
 
+  test('una dirección muy corta o muy larga explica el problema y sigue contando como fallo (BUG-022)', () => {
+    const sesion = conCarrito(S.DIRECCION, { zoneId: 'centro' });
+    const corta = step(r, sesion, txt('cl1'));
+    assert.equal(corta.state, S.DIRECCION);
+    assert.equal(corta.replies[0].body, 'La dirección es muy corta: escribe barrio, calle y número.');
+    assert.equal(corta.data.misses, 1);
+    const larga = step(r, sesion, txt('Calle 10 # 5-20 '.repeat(16).slice(0, 250)));
+    assert.equal(larga.state, S.DIRECCION);
+    assert.equal(larga.replies[0].body, 'La dirección es muy larga (máximo 200 caracteres).');
+    assert.equal(larga.data.address, undefined);
+    const segunda = step(r, { ...sesion, data: { ...sesion.data, misses: 1 } }, txt('cl1'));
+    assert.ok(ids(segunda).includes('human'), 'el segundo fallo ofrece hablar con una persona');
+    assert.match(step(r, sesion, btn('pay:0')).replies[0].body, /No te entendí/, 'un botón viejo sigue siendo "no entendí"');
+  });
+
   test('pago → confirmación con la lectura del pedido (describeOrder)', () => {
     const res = step(r, conCarrito(S.PAGO, { zoneId: 'norte', address: 'Calle 1 # 2-3' }), btn('pay:1'));
     assert.equal(res.state, S.CONFIRMACION);

@@ -435,9 +435,20 @@ function askToTap(restaurant, state, data, intent) {
   }
 }
 
-function miss(restaurant, state, data) {
+// En la dirección, un texto que no se acepta solo puede fallar por el largo (BUG-022): se dice
+// cuál de los dos, que ayuda más que "no te entendí". null si no es texto (p. ej. un botón viejo).
+function addressProblem(msg) {
+  if (msg?.type !== 'text') return null;
+  const length = String(msg.text ?? '').trim().replace(/\s+/g, ' ').length;
+  if (length < 5) return 'La dirección es muy corta: escribe barrio, calle y número.';
+  if (length > 200) return 'La dirección es muy larga (máximo 200 caracteres).';
+  return null;
+}
+
+// why reemplaza el "no te entendí" genérico cuando se sabe qué falló; igual cuenta como fallo.
+function miss(restaurant, state, data, why = 'No te entendí 🤔. Usa las opciones de abajo, por favor.') {
   const misses = (data.misses || 0) + 1;
-  const replies = [text('No te entendí 🤔. Usa las opciones de abajo, por favor.'), ...prompt(restaurant, state, data)];
+  const replies = [text(why), ...prompt(restaurant, state, data)];
   if (misses >= MISSES_BEFORE_OFFER) {
     replies.push({ kind: 'buttons', body: 'Si prefieres, te comunico con una persona del equipo.', buttons: [HUMAN_BUTTON] });
   }
@@ -512,6 +523,7 @@ export function step(restaurant, session, msg, { intent } = {}) {
   // "No, seguir" tras la pregunta de cancelar: se vuelve a mostrar el paso, sin cambiar nada.
   if (it?.type === 'continue') return go(restaurant, state, data, notice);
   const asked = it && fromAI ? askToTap(restaurant, state, data, it) : null;
-  const res = asked || (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data);
+  const why = state === S.DIRECCION ? addressProblem(msg) : null;
+  const res = asked || (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data, why ?? undefined);
   return notice.length ? { ...res, replies: [...notice, ...res.replies] } : res;
 }
