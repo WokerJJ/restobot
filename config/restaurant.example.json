@@ -10,9 +10,9 @@
     { "id": "norte", "name": "Barrios del norte", "fee": 5000 }
   ],
   "menu": [
-    { "id": "perro", "name": "Perro sencillo", "price": 9000, "aliases": ["perro", "perro caliente"] },
-    { "id": "especial", "name": "Perro especial", "price": 13000, "aliases": ["perro especial", "especial"] },
-    { "id": "salchipapa", "name": "Salchipapa", "price": 15000, "aliases": ["salchipapa", "salchi"] },
+    { "id": "perro", "name": "Perro sencillo", "price": 9000, "aliases": ["perro", "perro caliente"], "extras": ["queso", "tocineta"] },
+    { "id": "especial", "name": "Perro especial", "price": 13000, "aliases": ["perro especial", "especial", "perro de la casa"], "extras": ["queso", "tocineta"] },
+    { "id": "salchipapa", "name": "Salchipapa", "price": 15000, "aliases": ["salchipapa", "salchi"], "extras": ["queso", "tocineta"] },
     { "id": "gaseosa", "name": "Gaseosa 400 ml", "price": 4000, "aliases": ["gaseosa", "bebida"] }
   ],
   "extras": [

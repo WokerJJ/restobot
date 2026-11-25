@@ -42,11 +42,37 @@ const NOTE_FILLER = new Set(['de', 'del', 'el', 'la', 'los', 'las', 'un', 'una',
 const noteContent = s => words(s).filter(w => !NOTE_FILLER.has(w)).join(' ');
 const sameNote = (actual, expected) => noteContent(actual) === noteContent(expected);
 
+// En un caso, la nota esperada puede ser una lista de formas válidas de decir lo mismo:
+// "sin cebolla", "sin nada de cebolla", "sin nadita de cebolla". Se prefiere a ampliar
+// NOTE_FILLER, porque cada caso declara de forma explícita qué paráfrasis acepta.
+const noteOptions = note => (Array.isArray(note) ? note : note ? [note] : []);
+
 function sameLine(a, e) {
   if (a.itemId !== e.itemId || a.qty !== e.qty) return false;
   if (!isDeepStrictEqual(a.extras || [], [...(e.extras || [])].sort())) return false;
-  if (!e.note) return !a.note;
-  return Boolean(a.note) && sameNote(a.note, e.note);
+  const options = noteOptions(e.note);
+  if (!options.length) return !a.note;
+  return Boolean(a.note) && options.some(n => sameNote(a.note, n));
+}
+
+// Para validar un caso contra el contrato, una nota con varias formas se valida forma por forma:
+// una variante por cada forma, con las demás líneas en su primera forma. Así se validan todas sin
+// armar el producto cartesiano (que crece sin control) ni recortarlo (que deja formas sin revisar).
+const firstForm = line => {
+  const [note] = noteOptions(line.note);
+  return note === undefined ? { ...line } : { ...line, note };
+};
+
+function expandNotes(intent) {
+  if (intent?.type !== 'add_items') return [intent];
+  const base = intent.items.map(firstForm);
+  const variants = [{ ...intent, items: base }];
+  intent.items.forEach((line, i) => {
+    for (const note of noteOptions(line.note).slice(1)) {
+      variants.push({ ...intent, items: base.map((l, j) => (j === i ? { ...line, note } : l)) });
+    }
+  });
+  return variants;
 }
 
 // Las líneas se emparejan sin importar el orden: "una gaseosa y dos perros" es lo mismo
@@ -62,6 +88,12 @@ function sameItems(actual, expected) {
   return true;
 }
 
+// Las líneas rechazadas (EVA-022) se comparan solo por el multiconjunto de motivos: mention es
+// lo que dijo el cliente con las palabras que elija el intérprete, y no se califica. Sin
+// rejected equivale a [].
+const reasons = rejected => (rejected || []).map(x => x.reason).sort();
+const sameReasons = (actual, expected) => isDeepStrictEqual(reasons(actual), reasons(expected));
+
 /** ¿La intención obtenida (ya validada) coincide con la esperada? */
 export function matches(actual, expected) {
   if (expected === null) return actual === null;
@@ -72,7 +104,7 @@ export function matches(actual, expected) {
     case 'human':
       return true;
     case 'add_items':
-      return sameItems(actual.items, expected.items);
+      return sameItems(actual.items, expected.items) && sameReasons(actual.rejected, expected.rejected);
     case 'address':
       return sameAddress(actual.text, expected.text);
     default:
@@ -89,8 +121,15 @@ export function checkCase(restaurant, c) {
   if (!c.categoria) problems.push('sin categoría');
   for (const intent of [c.esperado, ...(c.aceptables || [])]) {
     if (intent === null) continue;
-    const valid = validateIntent(restaurant, intent);
-    if (!valid || !matches(valid, intent)) problems.push(`intención inválida: ${JSON.stringify(intent)}`);
+    // Una forma vacía pasa el contrato, pero sameLine nunca la acepta: para "sin nota" se omite note.
+    if (intent?.type === 'add_items' && Array.isArray(intent.items) &&
+        intent.items.some(l => Array.isArray(l?.note) && l.note.some(n => typeof n === 'string' && !n.trim()))) {
+      problems.push(`nota vacía en la lista de formas: ${JSON.stringify(intent)}`);
+    }
+    for (const variant of expandNotes(intent)) {
+      const valid = validateIntent(restaurant, variant);
+      if (!valid || !matches(valid, variant)) problems.push(`intención inválida: ${JSON.stringify(variant)}`);
+    }
   }
   return problems;
 }

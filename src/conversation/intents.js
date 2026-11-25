@@ -19,8 +19,29 @@
 //   { type: 'address', text }                     5 a 200 caracteres
 //   { type: 'payment', index }                    índice en restaurant.payments
 //   { type: 'confirm' } | { type: 'edit' }
-// Reservadas para la IA; flow.js todavía no las aplica (las trata como "no entendí"):
-//   { type: 'add_items', items: [{ itemId, qty, extras?: [extraId], note? }] }   (EVA-002)
+//   { type: 'add_items', items: [{ itemId, qty, extras?: [extraId], note? }],
+//     rejected?: [{ reason, mention, itemId?, extraId? }] }
+//        extras: solo los que el producto admite (menu[].extras); note: hasta 140 caracteres.
+//        La forma del lote es estricta: items es un arreglo de objetos, y entre items y rejected
+//        hay de 1 a MAX_ITEMS_PER_INTENT líneas; si no, null. Cada línea se valida por separado
+//        (EVA-022): las válidas quedan en items y las inválidas en rejected, con reason
+//        'producto' | 'extra' | 'cantidad' | 'nota'. mention es lo que dijo el cliente (lo manda
+//        la IA en cada línea): texto no confiable, limpio de caracteres de control y recortado a
+//        40; null si no viene. itemId solo si es un producto del menú y extraId solo si es un
+//        extra de la configuración. Sin líneas válidas pero con rechazadas, la intención vale
+//        con items: [], porque "no tenemos «pizza»" es mejor respuesta que "no te entendí".
+//        rejected se omite si está vacío, y se acepta de entrada para que validar dos veces dé
+//        lo mismo.
+//   { type: 'remove_item', itemId, qty?, exact?: true, extras?, note? }
+//        sin qty quita todas las unidades. Sin exact, extras ni nota quita del producto, sin
+//        importar la línea. Con extras o nota (validados como en cleanLine) o con exact: true,
+//        quita solo de la línea que coincide exactamente (lineKey de flow.js): lo que no venga
+//        cuenta como vacío. Así exact: true sin más nombra la línea "sin extras y sin nota" (EVA-021).
+//        Se eligió exact en vez de extras: [] con note: '' porque la normalización descarta los
+//        vacíos (como en cleanLine) y un modelo suele mandar note: '' sin querer decir nada.
+//        La salida siempre lleva exact: true cuando nombra una línea.
+//        Pendiente: cambiar una línea ("quítale la tocineta") necesita una intención compuesta.
+// Reservada para la IA; flow.js todavía no la aplica (la trata como "no entendí"):
 //   { type: 'question', topic: 'horario' | 'zonas' | 'pagos' | 'tiempo' | 'otro' }
 //
 // Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio y
@@ -30,7 +51,7 @@
 export const INTENT_TYPES = Object.freeze([
   'human', 'cancel', 'menu', 'media', 'start_order', 'select_item', 'menu_page', 'view_cart',
   'quantity', 'add_more', 'checkout', 'clear_cart', 'zone', 'pickup', 'address', 'payment',
-  'confirm', 'edit', 'add_items', 'question'
+  'confirm', 'edit', 'add_items', 'remove_item', 'question'
 ]);
 // Lo que puede devolver un modelo de IA: todo menos media y menu_page.
 export const AI_INTENT_TYPES = Object.freeze(INTENT_TYPES.filter(t => t !== 'media' && t !== 'menu_page'));
@@ -40,30 +61,90 @@ export const MAX_ITEMS_PER_INTENT = 20;
 // "se pueden pedir hasta 50" que "no te entendí". Por eso el contrato acepta hasta 999.
 export const MAX_QTY_UNDERSTOOD = 999;
 export const MAX_NOTE_LENGTH = 140;
+export const REJECT_REASONS = Object.freeze(['producto', 'extra', 'cantidad', 'nota']);
+export const MAX_MENTION_LENGTH = 40;
 
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isInt = (n, min, max) => Number.isInteger(n) && n >= min && n <= max;
 
-function validateItems(restaurant, items) {
-  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_ITEMS_PER_INTENT) return null;
-  const menu = new Set(restaurant.menu.map(m => m.id));
-  const extras = new Set((restaurant.extras || []).map(e => e.id));
-  const out = [];
-  for (const it of items) {
-    if (!isPlainObject(it) || !menu.has(it.itemId) || !isInt(it.qty, 1, MAX_QTY_UNDERSTOOD)) return null;
-    const line = { itemId: it.itemId, qty: it.qty };
-    if (it.extras !== undefined) {
-      if (!Array.isArray(it.extras) || !it.extras.every(e => extras.has(e))) return null;
-      if (it.extras.length) line.extras = [...new Set(it.extras)].sort();
-    }
-    if (it.note !== undefined) {
-      if (typeof it.note !== 'string' || it.note.length > MAX_NOTE_LENGTH) return null;
-      const note = it.note.trim().replace(/\s+/g, ' ');
-      if (note) line.note = note;
-    }
-    out.push(line);
+// Caracteres de control y de formato (saltos de línea, \u202e que invierte el texto...): la
+// nota se muestra al cliente y al local, así que se reemplazan por espacios.
+const CONTROL_CHARS = /[\p{Cc}\p{Cf}]/gu;
+
+const clean = s => s.replace(CONTROL_CHARS, ' ').trim().replace(/\s+/g, ' ');
+const isExtra = (restaurant, id) => (restaurant.extras || []).some(e => e.id === id);
+
+// Lo que dijo el cliente, tal como lo manda la IA: se limpia y se recorta por caracteres
+// completos (sin partir un emoji) porque se le muestra de vuelta.
+function cleanMention(mention) {
+  if (typeof mention !== 'string') return null;
+  return [...clean(mention)].slice(0, MAX_MENTION_LENGTH).join('').trim() || null;
+}
+
+/**
+ * Como cleanLine, pero si la línea no vale dice por qué: { line } o { reason, itemId?, extraId? }.
+ * Espera un objeto (la forma del lote la revisa quien llama).
+ */
+export function checkLine(restaurant, line, { maxQty = MAX_QTY_UNDERSTOOD } = {}) {
+  const item = restaurant.menu.find(m => m.id === line.itemId);
+  if (!item) return { reason: 'producto' };
+  const itemId = item.id;
+  if (!isInt(line.qty, 1, maxQty)) return { reason: 'cantidad', itemId };
+  const out = { itemId, qty: line.qty };
+  if (line.extras !== undefined) {
+    const allowed = new Set(item.extras || []);
+    if (!Array.isArray(line.extras)) return { reason: 'extra', itemId };
+    const bad = line.extras.find(e => !allowed.has(e));
+    if (bad !== undefined) return { reason: 'extra', itemId, ...(isExtra(restaurant, bad) ? { extraId: bad } : {}) };
+    if (line.extras.length) out.extras = [...new Set(line.extras)].sort();
   }
-  return out;
+  if (line.note !== undefined) {
+    if (typeof line.note !== 'string' || line.note.length > MAX_NOTE_LENGTH) return { reason: 'nota', itemId };
+    const note = clean(line.note);
+    if (note) out.note = note;
+  }
+  return { line: out };
+}
+
+/**
+ * Valida y normaliza una línea de pedido: producto del menú, cantidad, extras que el producto
+ * admite (sin repetir, ordenados) y nota limpia. La usan el contrato (maxQty 999: lo
+ * "entendido") y flow.js al limpiar el carrito guardado (maxQty MAX_QTY: lo que se cobra).
+ * @returns {{itemId:string, qty:number, extras?:string[], note?:string}|null}
+ */
+export function cleanLine(restaurant, line, opts) {
+  return isPlainObject(line) ? checkLine(restaurant, line, opts).line ?? null : null;
+}
+
+// Una línea rechazada que llega de fuera (una intención ya validada que se valida otra vez).
+function cleanRejected(restaurant, x) {
+  if (!isPlainObject(x) || !REJECT_REASONS.includes(x.reason)) return null;
+  return {
+    reason: x.reason,
+    mention: cleanMention(x.mention),
+    ...(restaurant.menu.some(m => m.id === x.itemId) ? { itemId: x.itemId } : {}),
+    ...(isExtra(restaurant, x.extraId) ? { extraId: x.extraId } : {})
+  };
+}
+
+function validateItems(restaurant, intent) {
+  const { items, rejected: given = [] } = intent;
+  if (!Array.isArray(items) || !Array.isArray(given)) return null;
+  const total = items.length + given.length;
+  if (total < 1 || total > MAX_ITEMS_PER_INTENT || !items.every(isPlainObject)) return null;
+  const valid = [];
+  const rejected = [];
+  for (const x of given) {
+    const r = cleanRejected(restaurant, x);
+    if (!r) return null;
+    rejected.push(r);
+  }
+  for (const it of items) {
+    const res = checkLine(restaurant, it);
+    if (res.line) valid.push(res.line);
+    else rejected.push({ reason: res.reason, mention: cleanMention(it.mention), ...(res.itemId ? { itemId: res.itemId } : {}), ...(res.extraId ? { extraId: res.extraId } : {}) });
+  }
+  return { items: valid, rejected };
 }
 
 /**
@@ -99,8 +180,20 @@ export function validateIntent(restaurant, intent, { source } = {}) {
     case 'question':
       return QUESTION_TOPICS.includes(intent.topic) ? { type, topic: intent.topic } : null;
     case 'add_items': {
-      const items = validateItems(restaurant, intent.items);
-      return items ? { type, items } : null;
+      const res = validateItems(restaurant, intent);
+      if (!res) return null;
+      return res.rejected.length ? { type, items: res.items, rejected: res.rejected } : { type, items: res.items };
+    }
+    case 'remove_item': {
+      if (!restaurant.menu.some(m => m.id === intent.itemId)) return null;
+      if (intent.qty !== undefined && !isInt(intent.qty, 1, MAX_QTY_UNDERSTOOD)) return null;
+      if (intent.exact !== undefined && typeof intent.exact !== 'boolean') return null;
+      // extras y nota se validan como en una línea del carrito (la cantidad no importa aquí).
+      const { line } = checkLine(restaurant, { itemId: intent.itemId, qty: 1, extras: intent.extras, note: intent.note });
+      if (!line) return null;
+      const out = { type, itemId: intent.itemId, ...(intent.qty !== undefined ? { qty: intent.qty } : {}) };
+      if (!intent.exact && !line.extras && !line.note) return out;
+      return { ...out, exact: true, ...(line.extras ? { extras: line.extras } : {}), ...(line.note ? { note: line.note } : {}) };
     }
     default:
       // Sin campos: cancel, menu, start_order, view_cart, add_more, checkout, clear_cart,

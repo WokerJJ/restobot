@@ -111,3 +111,51 @@ test('con source "ia" la salida pasa por el contrato de la IA y human se compara
   assert.equal(audio.ok, 0);
   assert.equal(audio.results[0].obtenido, null, 'la IA no puede producir media');
 });
+
+test('una nota esperada puede listar varias formas válidas de decir lo mismo', () => {
+  const esperado = { type: 'add_items', items: [
+    { itemId: 'perro', qty: 1, note: ['sin cebolla', 'sin nada de cebolla', 'sin nadita de cebolla'] },
+    { itemId: 'especial', qty: 1, note: ['con bastante cebolla', 'con buena cebolla'] }
+  ] };
+  const obtenido = notas => ({ type: 'add_items', items: [
+    { itemId: 'especial', qty: 1, note: notas[1] }, { itemId: 'perro', qty: 1, note: notas[0] }
+  ] });
+  assert.ok(matches(obtenido(['sin nadita de cebolla', 'con buena cebolla']), esperado));
+  assert.ok(matches(obtenido(['sin cebolla', 'con bastante cebolla']), esperado));
+  assert.ok(!matches(obtenido(['con cebolla', 'con buena cebolla']), esperado), 'el sentido sigue importando');
+  assert.ok(!matches(obtenido(['sin cebolla', 'sin cebolla']), esperado), 'las notas no se cruzan entre productos');
+  assert.deepEqual(checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado }), []);
+});
+
+test('checkCase valida cada forma de nota, sin recortar (BUG-020)', () => {
+  const formas = Array.from({ length: 60 }, (_, i) => `sin cebolla ${i}`);
+  formas[59] = 'x'.repeat(300);
+  const esperado = { type: 'add_items', items: [
+    { itemId: 'gaseosa', qty: 1, note: ['bien fría', 'helada'] },
+    { itemId: 'perro', qty: 1, note: formas }
+  ] };
+  const problemas = checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado });
+  assert.equal(problemas.length, 1, JSON.stringify(problemas).slice(0, 300));
+  assert.match(problemas[0], /^intención inválida: .*x{300}/);
+});
+
+test('checkCase rechaza una forma de nota vacía: para "sin nota" se omite note (BUG-021)', () => {
+  const esperado = { type: 'add_items', items: [{ itemId: 'perro', qty: 1, note: ['', 'sin cebolla'] }] };
+  const problemas = checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado });
+  assert.equal(problemas.length, 1);
+  assert.match(problemas[0], /nota vacía/);
+});
+
+test('las líneas rechazadas se comparan solo por el multiconjunto de motivos (EVA-022)', () => {
+  const perro = [{ itemId: 'perro', qty: 1 }];
+  const intent = (items, rejected) => ({ type: 'add_items', items, ...(rejected ? { rejected } : {}) });
+  const rech = (...reasons) => reasons.map(reason => ({ reason, mention: `dijo ${reason}` }));
+  assert.ok(matches(intent(perro, rech('producto')), intent(perro, [{ reason: 'producto' }])), 'mention no cuenta');
+  assert.ok(matches(intent([], rech('extra', 'producto')), intent([], [{ reason: 'producto' }, { reason: 'extra' }])), 'sin importar el orden');
+  assert.ok(!matches(intent(perro, rech('producto')), intent(perro)), 'esperado sin rejected equivale a []');
+  assert.ok(!matches(intent(perro), intent(perro, [{ reason: 'producto' }])));
+  assert.ok(!matches(intent(perro, rech('producto', 'producto')), intent(perro, [{ reason: 'producto' }])));
+  assert.ok(!matches(intent(perro, rech('extra')), intent(perro, [{ reason: 'producto' }])));
+  assert.ok(matches(intent(perro, []), intent(perro)));
+  assert.deepEqual(checkCase(r, { id: 'x', categoria: 'c', estado: 'menu', texto: 't', esperado: intent([], [{ reason: 'producto' }]) }), []);
+});
