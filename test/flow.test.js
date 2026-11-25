@@ -450,6 +450,38 @@ describe('líneas con extras y notas (EVA-002)', () => {
     assert.match(bodies(noEsta), /No tienes Salchipapa en el pedido/);
   });
 
+  test('la clave de línea no quita signos ni emojis de la nota (BUG-019)', () => {
+    const signos = step(r, ses(S.MENU), txt('x'), add([{ itemId: 'perro', qty: 1, note: '+ cebolla' }, { itemId: 'perro', qty: 1, note: '- cebolla' }]));
+    assert.deepEqual(signos.data.cart, [{ itemId: 'perro', qty: 1, note: '+ cebolla' }, { itemId: 'perro', qty: 1, note: '- cebolla' }]);
+    const mitad = step(r, ses(S.MENU), txt('x'), add([{ itemId: 'perro', qty: 1, note: '1/2 salchicha' }, { itemId: 'perro', qty: 1, note: '1 2 salchicha' }]));
+    assert.equal(mitad.data.cart.length, 2);
+    const emojis = step(r, ses(S.MENU), txt('x'), add([{ itemId: 'perro', qty: 1 }, { itemId: 'perro', qty: 1, note: '🌶️🌶️' }]));
+    assert.deepEqual(emojis.data.cart, [{ itemId: 'perro', qty: 1 }, { itemId: 'perro', qty: 1, note: '🌶️🌶️' }]);
+    const mayus = step(r, ses(S.MENU), txt('x'), add([{ itemId: 'perro', qty: 1, note: 'Sin cebolla' }, { itemId: 'perro', qty: 1, note: 'sin  cebolla' }]));
+    assert.deepEqual(mayus.data.cart, [{ itemId: 'perro', qty: 2, note: 'Sin cebolla' }]);
+  });
+
+  test('el carrito guardado fusiona líneas con la misma clave, salvo si pasarían del tope (BUG-019)', () => {
+    const guardado = step(r, ses(S.CARRITO, { cart: [
+      { itemId: 'perro', qty: 1, note: 'Sin cebolla' }, { itemId: 'gaseosa', qty: 1 }, { itemId: 'perro', qty: 2, note: 'sin cebolla' }
+    ] }), txt('x'));
+    assert.deepEqual(guardado.data.cart, [{ itemId: 'perro', qty: 3, note: 'Sin cebolla' }, { itemId: 'gaseosa', qty: 1 }]);
+    const tope = [{ itemId: 'perro', qty: 30, note: 'Sin cebolla' }, { itemId: 'gaseosa', qty: 1 }, { itemId: 'perro', qty: 30, note: 'sin cebolla' }];
+    assert.deepEqual(step(r, ses(S.CARRITO, { cart: tope }), txt('x')).data.cart, tope, 'no se corrige en silencio');
+  });
+
+  test('regresiones de la clave de línea (EVA-025)', () => {
+    const extras = step(r, ses(S.MENU), txt('x'), add([
+      { itemId: 'perro', qty: 1, extras: ['tocineta', 'queso'] }, { itemId: 'perro', qty: 1, extras: ['queso', 'tocineta'] }
+    ]));
+    assert.deepEqual(extras.data.cart, [{ itemId: 'perro', qty: 2, extras: ['queso', 'tocineta'] }]);
+    const vieja = step(r, ses(S.CARRITO, { cart: [{ itemId: 'perro', qty: 1 }] }), txt('x'), add([{ itemId: 'perro', qty: 1 }]));
+    assert.deepEqual(vieja.data.cart, [{ itemId: 'perro', qty: 2 }]);
+    const rm = (cart, intent) => step(r, ses(S.MENU, { cart, menuPage: 1 }), txt('x'), { intent: { type: 'remove_item', ...intent } });
+    assert.equal(rm([{ itemId: 'perro', qty: 2 }], { itemId: 'perro', qty: 1 }).state, S.CARRITO);
+    assert.equal(rm([{ itemId: 'perro', qty: 2 }], { itemId: 'perro' }).state, S.MENU, 'carrito vacío vuelve al menú');
+  });
+
   test('el carrito guardado descarta líneas con extras que el producto ya no admite', () => {
     const res = step(r, ses(S.CARRITO, { cart: [
       { itemId: 'gaseosa', qty: 1, extras: ['queso'] },

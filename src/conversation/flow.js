@@ -173,7 +173,7 @@ function sanitize(restaurant, data) {
   const zones = new Set((restaurant.deliveryZones || []).map(z => z.id));
   const base = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   const cart = Array.isArray(base.cart) ? base.cart : [];
-  const out = { ...base, cart: cart.map(l => cleanLine(restaurant, l, { maxQty: MAX_QTY })).filter(Boolean) };
+  const out = { ...base, cart: mergeLines(cart.map(l => cleanLine(restaurant, l, { maxQty: MAX_QTY })).filter(Boolean)) };
   if (out.pending && !menu.has(out.pending)) delete out.pending;
   if (out.zoneId && !zones.has(out.zoneId)) { out.zoneId = null; out.address = null; }
   if (out.payment && !restaurant.payments.includes(out.payment)) delete out.payment;
@@ -193,7 +193,27 @@ const itemName = (restaurant, id) => restaurant.menu.find(m => m.id === id)?.nam
 
 // Una línea del carrito se identifica por producto + extras + nota: dos perros "sin cebolla"
 // son una línea de 2, pero un perro "sin cebolla" y otro sin nota son dos líneas.
-const lineKey = l => [l.itemId, (l.extras || []).join(','), normalize(l.note || '')].join('|');
+// La nota llega limpia de cleanLine y solo se pasa a minúsculas: no se quitan signos, tildes ni
+// emojis, porque cambian lo que se pide ("+ cebolla" no es "- cebolla"; "🌶️🌶️" no es "sin nota").
+const lineKey = l => [l.itemId, (l.extras || []).join(','), (l.note || '').toLocaleLowerCase('es').normalize('NFC')].join('|');
+
+// Las líneas guardadas con la misma clave (p. ej. de antes de cambiar lineKey) se fusionan sumando
+// cantidades, en la posición de la primera. Si la suma pasara de MAX_QTY se dejan como estaban:
+// cleanLine descartaría la línea fusionada, y nunca se corrige en silencio.
+function mergeLines(lines) {
+  const totals = new Map();
+  for (const l of lines) totals.set(lineKey(l), (totals.get(lineKey(l)) || 0) + l.qty);
+  const done = new Set();
+  const out = [];
+  for (const l of lines) {
+    const key = lineKey(l);
+    if (totals.get(key) > MAX_QTY) { out.push(l); continue; }
+    if (done.has(key)) continue;
+    done.add(key);
+    out.push({ ...l, qty: totals.get(key) });
+  }
+  return out;
+}
 
 /**
  * Agrega líneas ya validadas al carrito. El tope de MAX_QTY es por producto, sumando todas sus
