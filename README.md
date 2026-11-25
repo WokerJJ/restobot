@@ -98,7 +98,7 @@ Lo que devuelva un modelo de IA pasa por `validateIntent` (`intents.js`) antes d
 
 ### Medir la interpretación
 
-`npm run evaluar` ejecuta un intérprete sobre `eval/interpretacion.json`: 53 conversaciones inventadas en español colombiano con la intención correcta de cada una. Informa el acierto por categoría y cada fallo. Es una medición, no una prueba: sirve para comparar intérpretes con los mismos casos. Línea base de las reglas: **23/53 (43 %)**; fallan en pedidos en texto libre ("dos perros, uno sin cebolla") y en preguntas, que es lo que resolverá la IA.
+`npm run evaluar` ejecuta un intérprete sobre `eval/interpretacion.json`: 67 mensajes inventados en español colombiano con la intención correcta de cada uno. Informa el acierto por categoría, cada fallo y, aparte, las acciones irreversibles indebidas (confirmar, cancelar, vaciar el carrito o derivar cuando no correspondía), cuyo umbral es 0. Es una medición, no una prueba: sirve para comparar intérpretes con los mismos casos. Línea base de las reglas: **35/67 (52 %)**, con 0 acciones indebidas; fallan en pedidos en texto libre ("dos perros, uno sin cebolla") y en preguntas, que es lo que resolverá la IA.
 
 ## Datos personales
 

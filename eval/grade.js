@@ -14,6 +14,15 @@ import { STATES } from '../src/conversation/states.js';
 
 export const CASES_PATH = new URL('./interpretacion.json', import.meta.url);
 
+// Acciones que no se deshacen con un mensaje: confirmar manda el pedido a la cocina, cancelar y
+// vaciar el carrito borran lo que el cliente armó, y derivar silencia al bot hasta que el local
+// libere el chat. Un "no entendí" de más solo cuesta volver a preguntar; una de estas por error
+// cuesta un pedido o un cliente. Por eso se cuentan aparte (umbral: 0), además del acierto.
+// Es "indebida" cuando el intérprete devuelve uno de estos tipos y ni 'esperado' ni 'aceptables'
+// tienen ese tipo. Se compara el tipo, no la intención entera: derivar con otro 'via' cuando se
+// esperaba derivar es un fallo de acierto, pero no una acción indebida.
+export const IRREVERSIBLE = Object.freeze(['confirm', 'cancel', 'clear_cart', 'human']);
+
 export function loadCases(path = CASES_PATH) {
   return JSON.parse(readFileSync(path, 'utf8')).casos;
 }
@@ -101,8 +110,10 @@ export async function evaluate(restaurant, cases, interpreter) {
       error = String(err?.message || err || 'error sin mensaje');
     }
     const actual = raw === null || raw === undefined ? null : validateIntent(restaurant, raw);
-    const ok = !error && [c.esperado, ...(c.aceptables || [])].some(e => matches(actual, e));
-    results.push({ id: c.id, categoria: c.categoria, estado: c.estado, texto: c.texto, esperado: c.esperado, obtenido: actual, ok, error });
+    const allowed = [c.esperado, ...(c.aceptables || [])];
+    const ok = !error && allowed.some(e => matches(actual, e));
+    const indebida = Boolean(actual) && IRREVERSIBLE.includes(actual.type) && !allowed.some(e => e?.type === actual.type);
+    results.push({ id: c.id, categoria: c.categoria, estado: c.estado, texto: c.texto, esperado: c.esperado, obtenido: actual, ok, indebida, error });
   }
 
   const byCategory = {};
@@ -113,5 +124,9 @@ export async function evaluate(restaurant, cases, interpreter) {
   }
   const ok = results.filter(r => r.ok).length;
   const errors = results.filter(r => r.error).length;
-  return { total: results.length, ok, errors, accuracy: results.length ? ok / results.length : 0, byCategory, results };
+  const indebidasIds = results.filter(r => r.indebida).map(r => r.id);
+  return {
+    total: results.length, ok, errors, accuracy: results.length ? ok / results.length : 0,
+    indebidas: indebidasIds.length, indebidasIds, byCategory, results
+  };
 }

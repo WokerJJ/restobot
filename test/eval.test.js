@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRestaurant } from '../src/config.js';
-import { loadCases, checkCase, matches, evaluate } from '../eval/grade.js';
+import { loadCases, checkCase, matches, evaluate, IRREVERSIBLE } from '../eval/grade.js';
+import { interpret } from '../src/conversation/interpret.js';
 
 const r = validateRestaurant(JSON.parse(readFileSync('config/restaurant.example.json', 'utf8')));
 const cases = loadCases();
@@ -71,5 +72,32 @@ test('un intérprete que lanza no acierta, ni siquiera donde se esperaba null (B
     const raro = await evaluate(r, cases, () => { throw thrown; });
     assert.equal(raro.ok, 0, `lanza ${JSON.stringify(thrown)}`);
     assert.equal(raro.errors, raro.total);
+  }
+});
+
+test('las acciones irreversibles indebidas se cuentan aparte (EVA-017)', async () => {
+  assert.deepEqual(IRREVERSIBLE, ['confirm', 'cancel', 'clear_cart', 'human']);
+  const todoConfirma = await evaluate(r, cases, () => ({ type: 'confirm' }));
+  const esperadas = cases
+    .filter(c => ![c.esperado, ...(c.aceptables || [])].some(e => e?.type === 'confirm'))
+    .map(c => c.id);
+  assert.ok(todoConfirma.indebidas > 0);
+  assert.equal(todoConfirma.indebidas, esperadas.length);
+  assert.deepEqual(todoConfirma.indebidasIds, esperadas);
+  assert.ok(todoConfirma.indebidasIds.includes('noactuar-03'), '"sí" en el menú no confirma nada');
+  assert.ok(!todoConfirma.indebidasIds.includes('confirmar-01'), 'confirmar cuando se pidió no es indebido');
+
+  const reglas = await evaluate(r, cases, interpret);
+  assert.equal(reglas.indebidas, 0, JSON.stringify(reglas.indebidasIds));
+  assert.deepEqual(reglas.indebidasIds, []);
+});
+
+test('el conjunto no está sesgado hacia entender: hay casos donde lo correcto es no actuar (EVA-017)', () => {
+  const noActuar = cases.filter(c => c.categoria === 'no-actuar');
+  assert.ok(noActuar.length >= 10);
+  for (const c of noActuar) {
+    for (const e of [c.esperado, ...(c.aceptables || [])]) {
+      assert.ok(e === null || !IRREVERSIBLE.includes(e.type), `${c.id} no debe aceptar una acción irreversible`);
+    }
   }
 });

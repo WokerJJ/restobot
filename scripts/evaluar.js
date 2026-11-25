@@ -31,6 +31,9 @@ if (args.includes('--json')) {
   const pct = n => `${(n * 100).toFixed(0)}%`;
   console.log(`Intérprete: ${name}`);
   console.log(`Acierto: ${report.ok}/${report.total} (${pct(report.accuracy)})`);
+  // Se muestra siempre, aunque sea 0: es la cifra que no puede subir (ver IRREVERSIBLE en grade.js).
+  const ids = report.indebidas ? `: ${report.indebidasIds.join(', ')}` : '';
+  console.log(`${report.indebidas ? '>>> ' : ''}Acciones irreversibles indebidas: ${report.indebidas} (umbral: 0)${ids}`);
   if (report.errors > 0) console.log(`Errores del intérprete: ${report.errors} (cuentan como fallo)`);
   console.log('');
   for (const [cat, s] of Object.entries(report.byCategory)) {
