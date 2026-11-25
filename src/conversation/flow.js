@@ -135,6 +135,30 @@ export function summary(restaurant, data) {
   return `📝 Revisa tu pedido:\n\n${describeOrder(order)}\n\nEntrega: ${delivery}\nPago: ${data.payment}\n\n¿Lo confirmamos?`;
 }
 
+/**
+ * Respuesta a una pregunta frecuente. Sale siempre de la configuración del restaurante, nunca
+ * del modelo: la IA solo dice de qué tema es la pregunta, así no puede inventar un horario ni
+ * una tarifa. Si falta el dato, se dice y se ofrece hablar con una persona.
+ */
+export function answerQuestion(restaurant, topic) {
+  const zones = restaurant.deliveryZones || [];
+  const eta = Array.isArray(restaurant.etaMinutes) ? restaurant.etaMinutes : null;
+  switch (topic) {
+    case 'horario':
+      if (restaurant.hours) return [text(`🕒 Nuestro horario: ${clip(restaurant.hours.replace(/\.$/, ''), 600)}.`)];
+      break;
+    case 'zonas':
+      if (!zones.length) return [text('🛵 Por ahora no hacemos domicilios: puedes recoger tu pedido en el local.')];
+      return [text(`🛵 Hacemos domicilios a:\n${zones.map(z => `• ${z.name}: ${formatCOP(z.fee)}`).join('\n')}\nTambién puedes recoger tu pedido en el local.`)];
+    case 'pagos':
+      return [text(`💳 Recibimos: ${restaurant.payments.join(', ')}.`)];
+    case 'tiempo':
+      if (eta) return [text(`⏱️ Un pedido tarda entre ${eta[0]} y ${eta[1]} minutos.`)];
+      break;
+  }
+  return [{ kind: 'buttons', body: 'No tengo esa información a la mano. Si quieres, te comunico con una persona del equipo.', buttons: [HUMAN_BUTTON] }];
+}
+
 /** Mensaje final, una vez guardado el pedido con su número. */
 export function confirmedReplies(restaurant, orderId, order) {
   const eta = Array.isArray(restaurant.etaMinutes) ? `${restaurant.etaMinutes[0]}–${restaurant.etaMinutes[1]} minutos` : null;
@@ -514,6 +538,10 @@ export function step(restaurant, session, msg, { intent } = {}) {
   if (it?.type === 'menu') return go(restaurant, S.MENU, { ...data, menuPage: 1 });
 
   if (state === S.INICIO) {
+    // Una pregunta como primer mensaje ("¿a qué hora cierran?"): se responde y se saluda.
+    if (it?.type === 'question') {
+      return { state: S.SALUDO, data: { cart: [] }, replies: [...answerQuestion(restaurant, it.topic), ...greeting(restaurant, msg.name)] };
+    }
     // "Buenas, me regala 2 salchipapas" como primer mensaje: se saluda y se arma el pedido.
     // Si se pasa de un tope o no quedó ninguna línea válida, se saluda con los avisos: el
     // pedido no desaparece en silencio.
@@ -540,6 +568,9 @@ export function step(restaurant, session, msg, { intent } = {}) {
   if (guard(state, data) !== state) return go(restaurant, state, data, notice);
   // "No, seguir" tras la pregunta de cancelar: se vuelve a mostrar el paso, sin cambiar nada.
   if (it?.type === 'continue') return go(restaurant, state, data, notice);
+  // Preguntas frecuentes en cualquier paso: se responde y se vuelve a mostrar el paso actual, sin
+  // contar como "no entendí" y sin tocar el pedido.
+  if (it?.type === 'question') return go(restaurant, state, data, [...notice, ...answerQuestion(restaurant, it.topic)]);
   const asked = it && fromAI ? askToTap(restaurant, state, data, it) : null;
   const why = state === S.DIRECCION ? addressProblem(msg) : null;
   const res = asked || (it && handlers[state](restaurant, data, it)) || miss(restaurant, state, data, why ?? undefined);

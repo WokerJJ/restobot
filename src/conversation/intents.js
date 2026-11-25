@@ -42,8 +42,8 @@
 //        vacíos (como en cleanLine) y un modelo suele mandar note: '' sin querer decir nada.
 //        La salida siempre lleva exact: true cuando nombra una línea.
 //        Pendiente: cambiar una línea ("quítale la tocineta") necesita una intención compuesta.
-// Reservada para la IA; flow.js todavía no la aplica (la trata como "no entendí"):
 //   { type: 'question', topic: 'horario' | 'zonas' | 'pagos' | 'tiempo' | 'otro' }
+//        solo la produce la IA; flow.js responde con la configuración (answerQuestion)
 //
 // Con { source: 'ia' } solo valen los tipos de AI_INTENT_TYPES: media sale de un audio, y
 // menu_page y continue de un botón, nunca de texto. En human se ignora el via que traiga y queda

@@ -110,6 +110,7 @@ test('todas las respuestas del flujo respetan los límites de la Cloud API', () 
       const m = r.menu.at(-1);
       for (const intent of [
         { type: 'confirm' }, { type: 'cancel' }, { type: 'clear_cart' }, { type: 'human' },
+        ...['horario', 'zonas', 'pagos', 'tiempo', 'otro'].map(topic => ({ type: 'question', topic })),
         { type: 'add_items', items: [{ itemId: m.id, qty: 1, extras: m.extras, note: largo('bien tostado por favor', 140) }] },
         // Líneas rechazadas (EVA-022): con una válida y sin ninguna, con todos los motivos.
         ...[[{ itemId: m.id, qty: 1 }], []].map(validas => ({ type: 'add_items', items: [...validas,
