@@ -508,6 +508,15 @@ test('la IA quita la línea exacta sin queso y deja la que tiene queso (EVA-028)
   assert.deepEqual(store.getSession(CLIENTE).data.cart, [{ itemId: 'perro', qty: 1, extras: ['queso'] }]);
 });
 
+test('bot.js le pasa a la IA el mismo estado que usará step: cantidad sin pending es menú (EVA-033)', async () => {
+  const ai = fakeAI();
+  const { store, say } = setup({ interpretAI: ai });
+  store.saveSession(CLIENTE, { state: 'cantidad', data: { cart: [] } }, 1_000_000);
+  await say('los de siempre');
+  assert.equal(ai.calls.length, 1);
+  assert.equal(ai.calls[0].state, 'menu');
+});
+
 test('mientras atiende una persona, la IA no se llama', async () => {
   const ai = fakeAI();
   const { say } = setup({ interpretAI: ai });

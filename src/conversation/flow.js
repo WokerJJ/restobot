@@ -455,6 +455,26 @@ function miss(restaurant, state, data, why = 'No te entendí 🤔. Usa las opcio
   return { state, data: { ...data, misses }, replies };
 }
 
+// La sesión como la ve step: un estado desconocido es INICIO y, salvo en una derivación (que no
+// se toca), los datos se limpian contra la carta actual (sanitize).
+function loadSession(restaurant, session) {
+  const known = Object.values(S).includes(session?.state);
+  const state = known ? session.state : S.INICIO;
+  if (state === S.HUMANO) return { state, data: structuredClone(session.data || {}), dropped: [] };
+  return { state, ...sanitize(restaurant, known ? structuredClone(session.data || {}) : {}) };
+}
+
+/**
+ * Estado efectivo y datos saneados de una sesión, igual que en step: además de loadSession,
+ * guard reubica una sesión incoherente (CANTIDAD sin pending es MENU). bot.js lo usa para
+ * decidir si llama a la IA y qué contexto le pasa, así ambos ven el mismo paso (EVA-033).
+ * @returns {{state:string, data:object}}
+ */
+export function resolveState(restaurant, session) {
+  const { state, data } = loadSession(restaurant, session);
+  return { state: guard(state, data), data };
+}
+
 /**
  * @param {object} restaurant  configuración validada
  * @param {{state:string, data:object}|null} session
@@ -465,13 +485,11 @@ function miss(restaurant, state, data, why = 'No te entendí 🤔. Usa las opcio
  * @returns {{state:string, data:object, replies:object[], order?:object, handoff?:{reason:string}}}
  */
 export function step(restaurant, session, msg, { intent } = {}) {
-  const known = Object.values(S).includes(session?.state);
-  const state = known ? session.state : S.INICIO;
+  const { state, data, dropped } = loadSession(restaurant, session);
 
   // Mientras una persona atiende, el bot no responde nada.
-  if (state === S.HUMANO) return { state, data: structuredClone(session.data || {}), replies: [] };
+  if (state === S.HUMANO) return { state, data, replies: [] };
 
-  const { data, dropped } = sanitize(restaurant, known ? structuredClone(session.data || {}) : {});
   // Una intención que llega de fuera no se aplica a ciegas: pasa por el contrato (BUG-013).
   // Solo la IA le pasa intenciones a step (las reglas corren aquí dentro), así que se valida
   // como salida de la IA: sin media ni menu_page, y human queda con via 'ia'.

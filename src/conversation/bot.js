@@ -1,7 +1,7 @@
 // Orquesta la conversación: carga la sesión, aplica step(), guarda y envía.
 // flow.js decide; este módulo solo hace efectos (base de datos, red, logs).
 
-import { step, confirmedReplies, STATES } from './flow.js';
+import { step, confirmedReplies, resolveState, STATES } from './flow.js';
 import { interpret, isGreeting } from './interpret.js';
 import { formatCOP } from '../pricing.js';
 import { maskPhone } from '../privacy.js';
@@ -155,12 +155,13 @@ export function createBot({
     // igual, así que la IA solo agregaría costo y espera.
     let intent;
     if (interpretAI && msg.type === 'text') {
-      const state = Object.values(STATES).includes(session?.state) ? session.state : STATES.INICIO;
+      // El mismo paso y los mismos datos que usará step (EVA-033).
+      const { state, data } = resolveState(restaurant, session);
       const greeting = (state === STATES.INICIO || state === STATES.SALUDO) && isGreeting(msg.text);
       if (state !== STATES.HUMANO && state !== STATES.DIRECCION && !greeting && interpret(restaurant, state, msg) === null &&
         allowAI(msg.from, t)) {
         try {
-          intent = (await interpretAI(restaurant, state, msg, { data: session?.data || {} })) ?? null;
+          intent = (await interpretAI(restaurant, state, msg, { data })) ?? null;
         } catch (err) {
           // 400, 401 o 403 no se arreglan solos (clave revocada, modelo o esfuerzo inválido): se
           // registra como error una sola vez, para que se vea sin llenar el log con cada mensaje.
