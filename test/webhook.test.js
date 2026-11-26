@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createApp } from '../src/server.js';
+import { createApp, shutdown } from '../src/server.js';
 import { openStore } from '../src/store.js';
 import { sign } from '../src/whatsapp/signature.js';
 import { parseWebhook } from '../src/whatsapp/parse.js';
@@ -133,4 +133,37 @@ test('guarda pedidos con su total', () => {
   const id = store.createOrder('57', { total: 13000, lines: [] });
   assert.equal(store.getOrder(id).total, 13000);
   store.close();
+});
+
+// Dobles del apagado ordenado (EVA-037): sin process.kill ni servidor real.
+function dobles({ idle = Promise.resolve() } = {}) {
+  const calls = [];
+  const logs = [];
+  return {
+    calls, logs,
+    server: { close(cb) { calls.push('server.close'); cb(); } },
+    bot: { idle: () => { calls.push('bot.idle'); return idle; } },
+    store: { close() { calls.push('store.close'); } },
+    log: { warn: m => logs.push(m), info: () => {} }
+  };
+}
+
+test('el apagado ordenado cierra el servidor, espera al bot y cierra el store (EVA-037)', async () => {
+  let liberar;
+  const d = dobles({ idle: new Promise(r => { liberar = r; }) });
+  const done = shutdown({ ...d, timeoutMs: 1000 });
+  await new Promise(r => setImmediate(r));
+  assert.ok(d.calls.includes('server.close'), 'deja de recibir mensajes');
+  assert.ok(!d.calls.includes('store.close'), 'no cierra el store con un mensaje en curso');
+  liberar();
+  assert.equal(await done, true);
+  assert.equal(d.calls.at(-1), 'store.close');
+  assert.deepEqual(d.logs, []);
+});
+
+test('si el bot no termina a tiempo, el apagado avisa y cierra igual (EVA-037)', async () => {
+  const d = dobles({ idle: new Promise(() => {}) });
+  assert.equal(await shutdown({ ...d, timeoutMs: 20 }), false);
+  assert.equal(d.calls.at(-1), 'store.close');
+  assert.match(d.logs[0], /tope/);
 });

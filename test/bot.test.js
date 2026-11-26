@@ -335,6 +335,53 @@ test('el aviso se espera aunque falle el envío del aviso de pedido sin confirma
   await assert.rejects(run, /Cloud API caída/);
 });
 
+// Hasta el resumen con recoger en el local y pago en efectivo; el siguiente toque es Confirmar.
+async function hastaElResumen({ say, tap }) {
+  await say('hola');
+  await tap('menu');
+  await tap('item:especial');
+  await tap('qty:2');
+  await tap('cart:checkout');
+  await tap('pickup');
+  await tap('pay:0');
+}
+
+test('si el proceso muere antes de enviar la confirmación, el pedido ya está en sin_confirmar (EVA-037)', async () => {
+  const client = fakeClient();
+  const sendText = client.sendText;
+  // El envío de la confirmación nunca resuelve: equivale a morir entre el COMMIT y el envío.
+  client.sendText = (to, body) => /confirmado/.test(body) ? new Promise(() => {}) : sendText(to, body);
+  const s = setup({ client });
+  await hastaElResumen(s);
+  s.tap('confirm');
+  await vaciarCola();
+  assert.equal(s.store.getOrder(1).status, 'sin_confirmar', 'el próximo mensaje avisará del pedido');
+  assert.equal(s.store.getSession(CLIENTE).state, 'inicio');
+});
+
+test('cuando la confirmación se envía, el pedido queda en recibido (EVA-037)', async () => {
+  const s = setup();
+  await hastaElResumen(s);
+  await s.tap('confirm');
+  assert.match(s.client.sent.at(-1).body, /Pedido #1 confirmado/);
+  assert.equal(s.store.getOrder(1).status, 'recibido');
+});
+
+test('bot.idle() espera a que termine el mensaje en curso (EVA-037)', async () => {
+  let liberar;
+  const client = fakeClient();
+  client.sendButtons = async () => { await new Promise(r => { liberar = r; }); return { id: 'wamid.out.x' }; };
+  const { bot, say } = setup({ client });
+  await bot.idle(); // sin mensajes en curso resuelve enseguida
+  say('hola');
+  const p = estado(bot.idle());
+  await vaciarCola();
+  assert.equal(p.listo, false, 'no resuelve con un mensaje en vuelo');
+  liberar();
+  await vaciarCola();
+  assert.equal(p.listo, true);
+});
+
 test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente mensaje informa el pedido #1', async () => {
   const client = fakeClient();
   const sendText = client.sendText;

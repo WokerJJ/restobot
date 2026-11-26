@@ -76,6 +76,30 @@ export function createApp({ env, restaurant, store, onMessage = async () => {}, 
   });
 }
 
+// Tope del apagado ordenado: docker stop espera 10 s por defecto antes de mandar SIGKILL.
+export const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+/**
+ * Apagado ordenado (EVA-037): deja de recibir webhooks, espera a que el bot termine los mensajes
+ * en curso (un pedido guardado cuya confirmación aún no salió) y cierra la base. Si el tope se
+ * cumple, avisa y cierra igual: lo que quede en vuelo se pierde, pero el pedido ya está guardado
+ * en sin_confirmar y se le avisa al cliente en su próximo mensaje.
+ * @returns {Promise<boolean>} true si el bot terminó antes del tope
+ */
+export async function shutdown({ server, bot, store, log = console, timeoutMs = SHUTDOWN_TIMEOUT_MS }) {
+  const closed = new Promise(resolve => server.close(() => resolve()));
+  // idle() se vuelve a pedir cuando el servidor cerró: una petición que estaba en curso pudo
+  // encolar un mensaje después de la primera espera.
+  const drained = Promise.all([closed, bot.idle()]).then(() => bot.idle()).then(() => true);
+  let timer;
+  const expired = new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); });
+  const finished = await Promise.race([drained, expired]);
+  clearTimeout(timer);
+  if (!finished) log.warn?.(`apagado: se cumplió el tope de ${timeoutMs} ms con mensajes en curso; se cierra igual.`);
+  store.close();
+  return finished;
+}
+
 /** Arma el cliente de envío: real si hay credenciales, de ensayo si no (nunca en producción). */
 export function createClient(env, log = console) {
   if (env.accessToken && env.phoneNumberId) {
@@ -106,6 +130,14 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   });
   if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
   const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff, interpretAI: createInterpreter(env), aiDailyLimit: env.aiDailyLimit });
-  createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
+  const server = createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
+  let stopping = null;
+  const stop = signal => {
+    if (stopping) return; // una segunda señal no repite el apagado
+    console.log(`${signal}: apagando sin cortar los mensajes en curso...`);
+    stopping = shutdown({ server, bot, store }).finally(() => process.exit(0));
+  };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
 }

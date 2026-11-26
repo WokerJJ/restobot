@@ -113,7 +113,7 @@ export function openStore(path = ':memory:') {
   const insertMsg = db.prepare(
     'INSERT OR IGNORE INTO messages (wa_id, customer, direction, type, body, media_id) VALUES (?,?,?,?,?,?)'
   );
-  const insertOrder = db.prepare('INSERT INTO orders (customer, data, total) VALUES (?,?,?)');
+  const insertOrder = db.prepare('INSERT INTO orders (customer, data, total, status) VALUES (?,?,?,?)');
   const selectSession = db.prepare('SELECT state, data, updated_at FROM sessions WHERE customer = ?');
   const upsertSession = db.prepare(`
     INSERT INTO sessions (customer, state, data, updated_at) VALUES (?,?,?,?)
@@ -145,8 +145,8 @@ export function openStore(path = ':memory:') {
       return db.prepare('SELECT * FROM messages WHERE customer = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
         .all(customer, limit).reverse();
     },
-    createOrder(customer, order) {
-      const r = insertOrder.run(customer, JSON.stringify(order), order.total);
+    createOrder(customer, order, status = 'recibido') {
+      const r = insertOrder.run(customer, JSON.stringify(order), order.total, status);
       return Number(r.lastInsertRowid);
     },
     getOrder(id) {

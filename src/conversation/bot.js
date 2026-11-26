@@ -185,8 +185,11 @@ export function createBot({
 
     if (result.order) {
       // Pedido y sesión se guardan juntos: nunca queda un pedido sin cerrar la sesión ni al revés.
+      // Nace sin_confirmar y pasa a recibido solo después de enviar la confirmación (EVA-037): si
+      // el proceso muere entre el COMMIT y el envío (docker stop, kill -9, falta de memoria), no
+      // corre ningún catch, y así el próximo mensaje del cliente igual le avisa que ya pidió.
       orderId = store.transaction(() => {
-        const id = store.createOrder(msg.from, result.order);
+        const id = store.createOrder(msg.from, result.order, 'sin_confirmar');
         store.saveSession(msg.from, { state: result.state, data }, t);
         return id;
       });
@@ -221,22 +224,25 @@ export function createBot({
       }
       for (const reply of replies) await deliver(msg.from, reply);
     } catch (err) {
-      // El pedido ya está guardado pero el cliente no lo sabe: se marca para avisarle en su
-      // próximo mensaje (y para que el local lo vea en `npm run derivaciones`).
-      if (orderId) {
-        store.setOrderStatus(orderId, 'sin_confirmar');
-        log.error?.(`no se pudo confirmar el pedido #${orderId} a ${maskPhone(msg.from)}: ${err.message}`);
-      }
+      // El pedido ya está guardado (en sin_confirmar) pero el cliente no lo sabe: se le avisa en
+      // su próximo mensaje y el local lo ve en `npm run derivaciones`. Aquí solo se registra.
+      if (orderId) log.error?.(`no se pudo confirmar el pedido #${orderId} a ${maskPhone(msg.from)}: ${err.message}`);
       throw err;
     } finally {
       // Esperar el aviso puede retener la cola de este cliente hasta su timeout (5 s): es
       // aceptable, porque tras derivar el bot ya está en silencio con este cliente.
       await notified;
     }
+    if (orderId) store.setOrderStatus(orderId, 'recibido');
     return result;
   }
 
   return {
-    onMessage: msg => serial(msg.from, () => handle(msg))
+    onMessage: msg => serial(msg.from, () => handle(msg)),
+    // Resuelve cuando no queda ningún mensaje en proceso, incluidos los que entren mientras
+    // espera. Lo usa el apagado ordenado de server.js (EVA-037). Las colas nunca rechazan.
+    async idle() {
+      while (queues.size) await Promise.all(queues.values());
+    }
   };
 }
