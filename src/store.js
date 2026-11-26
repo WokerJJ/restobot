@@ -73,12 +73,27 @@ export const MIGRATIONS = Object.freeze([
   `
 ]);
 
-// Pedidos sin confirmar de un cliente; se exporta para probar su plan de consulta (AUD-017).
+// Todo pedido pasa por sin_confirmar mientras se envía su confirmación, y los reintentos del
+// envío pueden alargarlo unos segundos (BUG-034). Solo cuenta como pendiente (aviso al cliente,
+// listado de `npm run derivaciones`) el que lleva más de este margen sin confirmarse.
+export const UNCONFIRMED_GRACE_MS = 2 * 60 * 1000;
+
+// created_at es TEXT UTC de datetime('now'): las ventanas se comparan en SQL con
+// datetime('now', '-N seconds'). Esta consulta corre con cada mensaje y se exporta para probar
+// que usa idx_orders_pending (AUD-017); el listado de abajo es de la consola y recorre la tabla.
 export const PENDING_CONFIRMATION_SQL = `
   SELECT id, total FROM orders
-  WHERE customer = ? AND status = 'sin_confirmar' AND created_at >= datetime('now', ?)
+  WHERE customer = ? AND status = 'sin_confirmar'
+    AND created_at >= datetime('now', ?) AND created_at <= datetime('now', ?)
   ORDER BY id
 `;
+const UNCONFIRMED_ORDERS_SQL = `
+  SELECT id, customer, total, created_at FROM orders
+  WHERE status = 'sin_confirmar' AND created_at <= datetime('now', ?)
+  ORDER BY id
+`;
+
+const secondsAgo = ms => `-${Math.floor(ms / 1000)} seconds`;
 
 // Aplica las migraciones pendientes, una por transacción. La versión se lee dentro de la
 // transacción (BEGIN IMMEDIATE) para que dos procesos que abren la base a la vez no migren dos veces.
@@ -206,10 +221,14 @@ export function openStore(path = ':memory:') {
     ordersInStatus(status) {
       return db.prepare('SELECT id, customer, total, created_at FROM orders WHERE status = ? ORDER BY id').all(status);
     },
-    // Pedidos guardados cuya confirmación no llegó al cliente, de los últimos withinMs.
-    // created_at es TEXT UTC de datetime('now'): se compara con datetime('now', ...) en SQL.
-    pendingConfirmation(customer, withinMs) {
-      return db.prepare(PENDING_CONFIRMATION_SQL).all(customer, `-${Math.floor(withinMs / 1000)} seconds`);
+    // Pedidos guardados cuya confirmación no llegó al cliente, de los últimos withinMs y con más
+    // de graceMs (BUG-034).
+    pendingConfirmation(customer, withinMs, graceMs = UNCONFIRMED_GRACE_MS) {
+      return db.prepare(PENDING_CONFIRMATION_SQL).all(customer, secondsAgo(withinMs), secondsAgo(graceMs));
+    },
+    // Todos los pedidos que el local debe confirmar a mano (`npm run derivaciones`).
+    unconfirmedOrders(graceMs = UNCONFIRMED_GRACE_MS) {
+      return db.prepare(UNCONFIRMED_ORDERS_SQL).all(secondsAgo(graceMs));
     },
     getSession(customer) {
       const row = selectSession.get(customer);

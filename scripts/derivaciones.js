@@ -20,7 +20,8 @@ try {
       console.log(`${s.customer}  derivado desde ${fecha(s.data.handoffAt ?? s.updatedAt)} · último mensaje ${fecha(s.updatedAt)}  motivo: ${s.data.handoffReason || '-'}  carrito: ${items} producto(s)`);
     }
     // Pedidos guardados cuya confirmación no llegó al cliente: el local debe confirmarlos a mano.
-    for (const o of store.ordersInStatus('sin_confirmar')) {
+    // Los de menos de 2 minutos no salen: todavía se están confirmando (BUG-034).
+    for (const o of store.unconfirmedOrders()) {
       console.log(`Pedido #${o.id} sin confirmar al cliente: ${o.customer}  total ${formatCOP(o.total)}  creado ${o.created_at} UTC`);
     }
   } else if (cmd === 'liberar' && phone) {

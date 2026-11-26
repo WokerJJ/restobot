@@ -5,6 +5,7 @@ import { step, confirmedReplies, resolveState, STATES } from './flow.js';
 import { interpret, isGreeting } from './interpret.js';
 import { formatCOP } from '../pricing.js';
 import { maskPhone } from '../privacy.js';
+import { UNCONFIRMED_GRACE_MS } from '../store.js';
 
 // Un carrito abandonado más de 3 horas se descarta y la conversación vuelve a empezar.
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
@@ -63,7 +64,7 @@ export function createBot({
   sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, handoffMaxMs = HANDOFF_MAX_MS,
   notifyHandoff = async () => false, interpretAI = null,
   aiLimitPerCustomer = AI_LIMIT_PER_CUSTOMER, aiWindowMs = AI_WINDOW_MS, aiDailyLimit = AI_DAILY_LIMIT,
-  timeZone = restaurant.timezone || 'America/Bogota'
+  timeZone = restaurant.timezone || 'America/Bogota', unconfirmedGraceMs = UNCONFIRMED_GRACE_MS
 }) {
   // Las cuentas de la IA viven en memoria: con varios procesos, cada uno lleva la suya (el tope
   // real es el configurado por el número de procesos), y un reinicio las pone en cero.
@@ -155,7 +156,7 @@ export function createBot({
     // Sin conversación activa, primero se avisa de los pedidos cuya confirmación no llegó,
     // para que el cliente no vuelva a pedir lo mismo.
     const unconfirmed = !session || session.state === STATES.INICIO
-      ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS)
+      ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS, unconfirmedGraceMs)
       : [];
 
     // La IA solo recibe texto que las reglas no entienden: los botones, el audio y las frases

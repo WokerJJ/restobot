@@ -30,7 +30,8 @@ function setup(opts = {}) {
   const bot = createBot({
     restaurant, store, client, log, now: () => clock, notifyHandoff: opts.notifyHandoff,
     handoffTtlMs: opts.handoffTtlMs, handoffMaxMs: opts.handoffMaxMs, interpretAI: opts.interpretAI,
-    aiLimitPerCustomer: opts.aiLimitPerCustomer, aiWindowMs: opts.aiWindowMs, aiDailyLimit: opts.aiDailyLimit
+    aiLimitPerCustomer: opts.aiLimitPerCustomer, aiWindowMs: opts.aiWindowMs, aiDailyLimit: opts.aiDailyLimit,
+    unconfirmedGraceMs: opts.unconfirmedGraceMs
   });
   let seq = 0;
   const msg = (extra) => ({ id: `wamid.in.${++seq}`, from: CLIENTE, name: 'Ana', ...extra });
@@ -293,7 +294,7 @@ test('releaseHandoff no pisa una sesión que el bot retomó después de leerla (
 });
 
 test('el aviso de pedido sin confirmar no pisa un estado que el panel ya cambió (AUD-013)', async () => {
-  const s = setup();
+  const s = setup({ unconfirmedGraceMs: 0 }); // sin el margen de BUG-034: el pedido cuenta ya
   const id = s.store.createOrder(CLIENTE, { total: 1000, lines: [] }, 'sin_confirmar');
   // El panel lo cambia mientras el aviso sale.
   const sendText = s.client.sendText;
@@ -336,6 +337,14 @@ test('si el bot falla antes de guardar la sesión, el mensaje queda sin marcar (
   assert.equal(store.unprocessedMessages(60_000).length, 1);
   await bot.onMessage(m);
   assert.equal(store.unprocessedMessages(60_000).length, 0);
+});
+
+test('un pedido que se acaba de crear y aún se confirma no dispara el aviso de pendiente (BUG-034)', async () => {
+  const { store, client, say } = setup();
+  store.createOrder(CLIENTE, { total: 1000, lines: [] }, 'sin_confirmar');
+  await say('hola');
+  assert.doesNotMatch(client.sent[0].body, /ya quedó registrado/);
+  assert.equal(store.getOrder(1).status, 'sin_confirmar', 'sigue en manos de quien lo está confirmando');
 });
 
 test('si liberan el chat entre la lectura y la renovación, el bot responde y no lo vuelve a derivar', async () => {
@@ -382,7 +391,8 @@ test('el aviso se espera aunque falle el envío del aviso de pedido sin confirma
   const client = fakeClient();
   client.sendText = async () => { throw new Error('Cloud API caída'); };
   const aviso = avisoPendiente();
-  const { store, bot, msg } = setup({ client, notifyHandoff: aviso.notifyHandoff });
+  // Sin el margen de BUG-034, para que el primer envío sea el aviso del pedido pendiente.
+  const { store, bot, msg } = setup({ client, notifyHandoff: aviso.notifyHandoff, unconfirmedGraceMs: 0 });
   store.setOrderStatus(store.createOrder(CLIENTE, { total: 1000, lines: [] }), 'sin_confirmar');
 
   const run = bot.onMessage(msg({ type: 'text', text: 'quiero hablar con un asesor' }));
@@ -448,7 +458,7 @@ test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente me
     if (fallar && /confirmado/.test(body)) { fallar = false; throw new Error('Cloud API caída'); }
     return sendText(to, body);
   };
-  const { store, say, tap, logs } = setup({ client });
+  const { store, say, tap, logs } = setup({ client, unconfirmedGraceMs: 0 }); // sin el margen de BUG-034
   await say('hola');
   await tap('menu');
   await tap('item:especial');

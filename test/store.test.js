@@ -7,7 +7,7 @@ import { rmSync, mkdirSync } from 'node:fs';
 import { once } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore, MIGRATIONS, PENDING_CONFIRMATION_SQL } from '../src/store.js';
+import { openStore, MIGRATIONS, PENDING_CONFIRMATION_SQL, UNCONFIRMED_GRACE_MS } from '../src/store.js';
 
 // Base en un archivo temporal propio (con sus -wal y -shm); se borra al terminar la prueba.
 function tempDb(t) {
@@ -264,12 +264,30 @@ test('la migración de processed_at se aplica sobre una base existente sin repro
   }
 });
 
+test('un pedido sin_confirmar de menos de 2 minutos aún se está confirmando: no cuenta como pendiente (BUG-034)', t => {
+  assert.equal(UNCONFIRMED_GRACE_MS, 2 * 60 * 1000);
+  const path = tempDb(t);
+  const store = openStore(path);
+  try {
+    const reciente = store.createOrder('57', { total: 1000, lines: [] }, 'sin_confirmar');
+    const viejo = store.createOrder('57', { total: 2000, lines: [] }, 'sin_confirmar');
+    const db = new DatabaseSync(path);
+    db.exec(`UPDATE orders SET created_at = datetime('now', '-3 minutes') WHERE id = ${viejo}`);
+    db.close();
+    assert.deepEqual(store.pendingConfirmation('57', 24 * 60 * 60 * 1000).map(o => o.id), [viejo]);
+    assert.deepEqual(store.unconfirmedOrders().map(o => o.id), [viejo]);
+    assert.deepEqual(store.pendingConfirmation('57', 24 * 60 * 60 * 1000, 0).map(o => o.id), [reciente, viejo], 'el margen se puede inyectar');
+  } finally {
+    store.close();
+  }
+});
+
 test('pendingConfirmation usa el índice parcial de pedidos sin confirmar (AUD-017)', t => {
   const path = baseFase1(t);
   openStore(path).close();
   const db = new DatabaseSync(path);
   try {
-    const plan = db.prepare(`EXPLAIN QUERY PLAN ${PENDING_CONFIRMATION_SQL}`).all('57', '-86400 seconds').map(r => r.detail).join(' | ');
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${PENDING_CONFIRMATION_SQL}`).all('57', '-86400 seconds', '-120 seconds').map(r => r.detail).join(' | ');
     assert.match(plan, /USING INDEX idx_orders_pending/, plan);
   } finally {
     db.close();
