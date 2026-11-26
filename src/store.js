@@ -64,8 +64,21 @@ export const MIGRATIONS = Object.freeze([
     ALTER TABLE messages ADD COLUMN processed_at INTEGER;
     ALTER TABLE messages ADD COLUMN reply_id TEXT;
     UPDATE messages SET processed_at = 0 WHERE processed_at IS NULL;
+  `,
+  // v5 · índice parcial para pendingConfirmation (AUD-017), que corre con cada mensaje sin
+  // conversación activa. Solo indexa los sin_confirmar (casi ninguno), así que pesa poco; el
+  // orden (customer, id) sirve también al ORDER BY id.
+  `
+    CREATE INDEX IF NOT EXISTS idx_orders_pending ON orders(customer, id) WHERE status = 'sin_confirmar';
   `
 ]);
+
+// Pedidos sin confirmar de un cliente; se exporta para probar su plan de consulta (AUD-017).
+export const PENDING_CONFIRMATION_SQL = `
+  SELECT id, total FROM orders
+  WHERE customer = ? AND status = 'sin_confirmar' AND created_at >= datetime('now', ?)
+  ORDER BY id
+`;
 
 // Aplica las migraciones pendientes, una por transacción. La versión se lee dentro de la
 // transacción (BEGIN IMMEDIATE) para que dos procesos que abren la base a la vez no migren dos veces.
@@ -196,11 +209,7 @@ export function openStore(path = ':memory:') {
     // Pedidos guardados cuya confirmación no llegó al cliente, de los últimos withinMs.
     // created_at es TEXT UTC de datetime('now'): se compara con datetime('now', ...) en SQL.
     pendingConfirmation(customer, withinMs) {
-      return db.prepare(`
-        SELECT id, total FROM orders
-        WHERE customer = ? AND status = 'sin_confirmar' AND created_at >= datetime('now', ?)
-        ORDER BY id
-      `).all(customer, `-${Math.floor(withinMs / 1000)} seconds`);
+      return db.prepare(PENDING_CONFIRMATION_SQL).all(customer, `-${Math.floor(withinMs / 1000)} seconds`);
     },
     getSession(customer) {
       const row = selectSession.get(customer);
