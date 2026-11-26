@@ -216,6 +216,41 @@ describe('entrega, pago y confirmación', () => {
     }
   });
 
+  test('si el total cambió y el cliente pregunta o manda algo que no se entiende, se avisa (BUG-033)', () => {
+    const resumen = step(r, conCarrito(S.PAGO, { pickup: true }), btn('pay:0'));
+    const caro = validateRestaurant({ ...r, menu: r.menu.map(m => m.id === 'especial' ? { ...m, price: 20000 } : m) });
+    const aviso = 'Cambiaron los precios: revisa el nuevo total.';
+    const pregunta = step(caro, resumen, txt('x'), { intent: { type: 'question', topic: 'tiempo' } });
+    const sticker = step(caro, resumen, { type: 'unsupported' });
+    const noEntendi = step(caro, resumen, txt('asdf qwer'));
+    for (const res of [pregunta, sticker, noEntendi]) {
+      assert.equal(res.state, S.CONFIRMACION);
+      assert.equal(res.replies.filter(x => x.body === aviso).length, 1);
+      assert.match(bodies(res), /Total: \$\s?40\.000/);
+      assert.equal(res.data.quote, 40000);
+    }
+    // Ya avisado, el siguiente mensaje no lo repite.
+    assert.ok(!bodies(step(caro, pregunta, txt('asdf qwer'))).includes('Cambiaron los precios'));
+  });
+
+  test('sin cambio de precio, o sin quote previo, no se avisa (BUG-033)', () => {
+    const resumen = step(r, conCarrito(S.PAGO, { pickup: true }), btn('pay:0'));
+    assert.doesNotMatch(bodies(resumen), /Cambiaron los precios/, 'primera vez: no hay quote previo');
+    const pregunta = step(r, resumen, txt('x'), { intent: { type: 'question', topic: 'tiempo' } });
+    assert.doesNotMatch(bodies(pregunta), /Cambiaron los precios/);
+    const antigua = step(r, conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' }), txt('asdf qwer'));
+    assert.doesNotMatch(bodies(antigua), /Cambiaron los precios/, 'sesión antigua sin quote');
+  });
+
+  test('al confirmar con el precio cambiado, el aviso sale una sola vez (BUG-033)', () => {
+    const resumen = step(r, conCarrito(S.PAGO, { pickup: true }), btn('pay:0'));
+    const caro = validateRestaurant({ ...r, menu: r.menu.map(m => m.id === 'especial' ? { ...m, price: 20000 } : m) });
+    const res = step(caro, resumen, btn('confirm'));
+    assert.equal(res.order, undefined);
+    assert.equal(res.replies.filter(x => /Cambiaron los precios/.test(x.body ?? '')).length, 1);
+    assert.equal(res.replies[0].body, 'Cambiaron los precios: revisa el nuevo total antes de confirmar.');
+  });
+
   test('recoger en el local no cobra domicilio', () => {
     const res = step(r, conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo', quote: 26000 }), txt('sí'));
     assert.equal(res.order.delivery, 0);
