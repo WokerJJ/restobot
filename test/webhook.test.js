@@ -13,10 +13,10 @@ const payload = (messages) => ({
   entry: [{ changes: [{ value: { contacts: [{ wa_id: '573001112233', profile: { name: 'Ana' } }], messages } }] }]
 });
 
-async function withApp(fn) {
+async function withApp(fn, { wrapStore = s => s } = {}) {
   const store = openStore(':memory:');
   const received = [];
-  const app = createApp({ env, restaurant, store, onMessage: async m => { received.push(m); }, log: {} });
+  const app = createApp({ env, restaurant, store: wrapStore(store), onMessage: async m => { received.push(m); }, log: {} });
   await new Promise(r => app.listen(0, r));
   const base = `http://localhost:${app.address().port}`;
   try { await fn({ base, store, received }); } finally { app.close(); store.close(); }
@@ -50,6 +50,70 @@ test('acepta mensaje firmado, lo guarda y no duplica reintentos', () => withApp(
   assert.equal(received.length, 1);
   assert.equal(store.history('573001112233').length, 1);
 }));
+
+// Un store cuyo saveMessage falla mientras fail.on sea true (SQLITE_BUSY, SQLITE_FULL...).
+const failing = fail => s => ({
+  ...s,
+  saveMessage(m) { if (fail.on) throw new Error('SQLITE_BUSY: database is locked'); return s.saveMessage(m); }
+});
+
+test('si saveMessage falla, el webhook responde 500', () => {
+  const fail = { on: true };
+  return withApp(async ({ base, store, received }) => {
+    const body = JSON.stringify(payload([{ id: 'wamid.1', from: '573001112233', timestamp: '1', type: 'text', text: { body: 'hola' } }]));
+    assert.equal((await post(base, body, sign(Buffer.from(body), env.appSecret))).status, 500);
+    await new Promise(r => setTimeout(r, 20));
+    assert.equal(received.length, 0);
+    assert.equal(store.history('573001112233').length, 0);
+  }, { wrapStore: failing(fail) });
+});
+
+test('un mensaje sin id no descarta el resto del lote', () => withApp(async ({ base, store, received }) => {
+  const body = JSON.stringify(payload([
+    { from: '573001112233', timestamp: '1', type: 'text', text: { body: 'sin id' } },
+    { id: 'wamid.2', timestamp: '2', type: 'text', text: { body: 'sin from' } },
+    { id: 'wamid.3', from: '573001112233', timestamp: '3', type: 'text', text: { body: 'hola' } }
+  ]));
+  assert.equal((await post(base, body, sign(Buffer.from(body), env.appSecret))).status, 200);
+  await new Promise(r => setTimeout(r, 20));
+  assert.deepEqual(received.map(m => m.id), ['wamid.3']);
+  assert.equal(store.history('573001112233').length, 1);
+}));
+
+test('un reintento de Meta después de un 500 sí se procesa una vez', () => {
+  const fail = { on: true };
+  return withApp(async ({ base, store, received }) => {
+    const body = JSON.stringify(payload([
+      { id: 'wamid.1', from: '573001112233', timestamp: '1', type: 'text', text: { body: 'hola' } },
+      { id: 'wamid.2', from: '573001112233', timestamp: '2', type: 'text', text: { body: 'menú' } }
+    ]));
+    const sig = sign(Buffer.from(body), env.appSecret);
+    assert.equal((await post(base, body, sig)).status, 500);
+    fail.on = false;
+    assert.equal((await post(base, body, sig)).status, 200); // reintento de Meta
+    assert.equal((await post(base, body, sig)).status, 200); // reintento duplicado
+    await new Promise(r => setTimeout(r, 20));
+    assert.deepEqual(received.map(m => m.id), ['wamid.1', 'wamid.2']);
+    assert.equal(store.history('573001112233').length, 2);
+  }, { wrapStore: failing(fail) });
+});
+
+test('un error en onMessage de un mensaje no corta el resto del lote', async () => {
+  const store = openStore(':memory:');
+  const received = [];
+  const onMessage = async m => { if (m.id === 'wamid.1') throw new Error('falla'); received.push(m.id); };
+  const app = createApp({ env, restaurant, store, onMessage, log: {} });
+  await new Promise(r => app.listen(0, r));
+  try {
+    const body = JSON.stringify(payload([
+      { id: 'wamid.1', from: '573001112233', timestamp: '1', type: 'text', text: { body: 'hola' } },
+      { id: 'wamid.2', from: '573001112233', timestamp: '2', type: 'text', text: { body: 'menú' } }
+    ]));
+    assert.equal((await post(`http://localhost:${app.address().port}`, body, sign(Buffer.from(body), env.appSecret))).status, 200);
+    await new Promise(r => setTimeout(r, 20));
+    assert.deepEqual(received, ['wamid.2']);
+  } finally { app.close(); store.close(); }
+});
 
 test('parsea texto, audio, botón y tipos no soportados; ignora estados', () => {
   const msgs = parseWebhook(payload([

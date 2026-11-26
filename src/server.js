@@ -55,12 +55,16 @@ export function createApp({ env, restaurant, store, onMessage = async () => {}, 
         let payload;
         try { payload = JSON.parse(raw.toString('utf8')); } catch { return send(res, 400, 'bad json'); }
 
+        // Guardar y deduplicar ANTES de responder: con un 200 Meta da el lote por entregado y no
+        // lo reintenta; ante cualquier otra respuesta reintenta hasta 7 días (documentación de la
+        // Cloud API). Si el guardado falla (SQLITE_BUSY, SQLITE_FULL...), el catch responde 500 y
+        // la transacción revierte el lote entero: el reintento es seguro porque se deduplica por wa_id.
+        const msgs = parseWebhook(payload);
+        const fresh = store.transaction(() => msgs.filter(m => store.saveMessage(m)));
         // Responder 200 rápido: Meta reintenta si tardamos. El trabajo va después.
         send(res, 200, 'ok');
-        for (const msg of parseWebhook(payload)) {
-          if (!store.saveMessage(msg)) continue; // duplicado
-          onMessage(msg).catch(err => log.error?.('onMessage falló', err));
-        }
+        // Cada mensaje con su propio catch: un error en uno no corta el resto del lote.
+        for (const msg of fresh) onMessage(msg).catch(err => log.error?.('onMessage falló', err));
         return;
       }
 

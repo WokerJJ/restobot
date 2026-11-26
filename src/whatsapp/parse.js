@@ -7,6 +7,8 @@ export function parseWebhook(payload) {
       const v = change.value || {};
       const names = Object.fromEntries((v.contacts || []).map(c => [c.wa_id, c.profile?.name]));
       for (const m of v.messages || []) {
+        // Sin id no hay deduplicación ni se puede guardar; sin from no hay a quién responder.
+        if (typeof m?.id !== 'string' || !m.id || typeof m.from !== 'string' || !m.from) continue;
         const base = { id: m.id, from: m.from, name: names[m.from] || null, timestamp: Number(m.timestamp) };
         switch (m.type) {
           case 'text':
