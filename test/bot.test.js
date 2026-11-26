@@ -312,6 +312,32 @@ test('la confirmación de un pedido nuevo no pisa un estado que el panel ya camb
   assert.equal(s.store.getOrder(1).status, 'en_preparacion');
 });
 
+test('un mensaje atendido queda marcado como procesado, también si se silencia por derivación (AUD-015)', async () => {
+  const { store, bot, msg } = setup();
+  const entrar = m => { store.saveMessage(m); return bot.onMessage(m); };
+  const hola = msg({ type: 'text', text: 'hola' });
+  await entrar(hola);
+  assert.equal(store.history(CLIENTE).find(m => m.wa_id === hola.id).processed_at, 1_000_000);
+  await entrar(msg({ type: 'text', text: 'quiero hablar con una persona' }));
+  const callado = msg({ type: 'text', text: '¿hola?' });
+  await entrar(callado);
+  assert.equal(store.getSession(CLIENTE).state, 'humano');
+  assert.equal(store.history(CLIENTE).find(m => m.wa_id === callado.id).processed_at, 1_000_000);
+  assert.deepEqual(store.unprocessedMessages(60_000), []);
+});
+
+test('si el bot falla antes de guardar la sesión, el mensaje queda sin marcar (AUD-015)', async () => {
+  const { store, bot, msg } = setup();
+  const m = msg({ type: 'text', text: 'hola' });
+  store.saveMessage(m);
+  const roto = { ...store, getSession: () => { throw new Error('SQLITE_BUSY'); } };
+  const fallido = createBot({ restaurant, store: roto, client: fakeClient(), log: {} });
+  await assert.rejects(fallido.onMessage(m), /SQLITE_BUSY/);
+  assert.equal(store.unprocessedMessages(60_000).length, 1);
+  await bot.onMessage(m);
+  assert.equal(store.unprocessedMessages(60_000).length, 0);
+});
+
 test('si liberan el chat entre la lectura y la renovación, el bot responde y no lo vuelve a derivar', async () => {
   // Carrera con `npm run derivaciones -- liberar` (otro proceso): el bot leyó 'humano', pero
   // cuando va a renovar el plazo la fila ya está liberada.

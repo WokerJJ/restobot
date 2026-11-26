@@ -239,6 +239,31 @@ test('migra una base de la fase 1 conservando pedidos, mensajes e ids', t => {
   }
 });
 
+test('la migración de processed_at se aplica sobre una base existente sin reprocesar la historia (AUD-015)', t => {
+  const path = baseFase1(t);
+  const store = openStore(path);
+  try {
+    const columnas = (() => {
+      const db = new DatabaseSync(path);
+      try { return db.prepare('PRAGMA table_info(messages)').all().map(c => c.name); } finally { db.close(); }
+    })();
+    assert.ok(columnas.includes('processed_at') && columnas.includes('reply_id'));
+    assert.equal(store.history('57').at(-1).processed_at, 0, 'el mensaje viejo cuenta como procesado');
+    assert.deepEqual(store.unprocessedMessages(10 * 60 * 1000), []);
+    // Un mensaje nuevo nace sin procesar y guarda el id del botón.
+    store.saveMessage({ id: 'wamid.n1', from: '57', type: 'interactive', text: 'Ver menú', replyId: 'menu' });
+    const [row] = store.unprocessedMessages(10 * 60 * 1000);
+    assert.equal(row.wa_id, 'wamid.n1');
+    assert.equal(row.reply_id, 'menu');
+    assert.equal(row.recent, 1);
+    assert.equal(store.markProcessed('wamid.n1', 5), true);
+    assert.equal(store.markProcessed('wamid.n1', 6), false, 'no se marca dos veces');
+    assert.deepEqual(store.unprocessedMessages(10 * 60 * 1000), []);
+  } finally {
+    store.close();
+  }
+});
+
 test('reabrir una base ya migrada no cambia nada ni falla', t => {
   const path = baseFase1(t);
   openStore(path).close();

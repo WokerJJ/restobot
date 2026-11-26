@@ -133,7 +133,13 @@ export function createBot({
       const handoffAt = session.data?.handoffAt ?? session.updatedAt;
       if (t - session.updatedAt <= handoffTtlMs && t - handoffAt <= handoffMaxMs) {
         // El bot calla, pero el mensaje renueva el plazo: la persona puede seguir atendiendo.
-        if (store.touchHandoff(msg.from, t, handoffAt)) return { state: STATES.HUMANO, silenced: true };
+        // Silenciar también es atenderlo: se marca procesado en la misma transacción (AUD-015).
+        const renewed = store.transaction(() => {
+          const ok = store.touchHandoff(msg.from, t, handoffAt);
+          if (ok) store.markProcessed(msg.id, t);
+          return ok;
+        });
+        if (renewed) return { state: STATES.HUMANO, silenced: true };
         // Otro proceso liberó el chat entre la lectura y la renovación: se sigue con lo guardado.
         session = store.getSession(msg.from);
       } else {
@@ -190,6 +196,10 @@ export function createBot({
       : result.replies;
     let orderId = null;
 
+    // El mensaje se marca procesado junto con la sesión (y el pedido) que produjo (AUD-015): si el
+    // proceso muere antes, el arranque lo reencola; si muere después, ya no, aunque la respuesta
+    // no haya salido, porque reaplicarlo sobre la sesión avanzada lo contaría dos veces (un pedido
+    // así queda en sin_confirmar y se avisa en el próximo mensaje, EVA-037).
     if (result.order) {
       // Pedido y sesión se guardan juntos: nunca queda un pedido sin cerrar la sesión ni al revés.
       // Nace sin_confirmar y pasa a recibido solo después de enviar la confirmación (EVA-037): si
@@ -198,12 +208,16 @@ export function createBot({
       orderId = store.transaction(() => {
         const id = store.createOrder(msg.from, result.order, 'sin_confirmar');
         store.saveSession(msg.from, { state: result.state, data }, t);
+        store.markProcessed(msg.id, t);
         return id;
       });
       replies = confirmedReplies(restaurant, orderId, result.order);
       log.info?.(`pedido #${orderId} confirmado (${maskPhone(msg.from)}, total ${result.order.total})`);
     } else {
-      store.saveSession(msg.from, { state: result.state, data }, t);
+      store.transaction(() => {
+        store.saveSession(msg.from, { state: result.state, data }, t);
+        store.markProcessed(msg.id, t);
+      });
     }
 
     // El aviso al local sale en paralelo con la respuesta al cliente y nunca la bloquea.

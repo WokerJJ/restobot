@@ -76,6 +76,36 @@ export function createApp({ env, restaurant, store, onMessage = async () => {}, 
   });
 }
 
+// Al arrancar se reencolan los mensajes guardados que el bot no alcanzó a atender (AUD-015), solo
+// los de los últimos 10 minutos: responder tarde algo de hace horas confunde más que no responder.
+export const RECOVERY_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Reencola en bot.onMessage, en orden de llegada, los mensajes entrantes sin procesar de la
+ * ventana; los más viejos se marcan sin responderlos y se cuentan en el log (sin teléfonos).
+ * Se llama antes de escuchar: así van primero en la cola de cada cliente. Con varios procesos
+ * arrancando a la vez, cada uno los reencolaría: hoy el bot corre en un solo proceso.
+ * @returns {{requeued:number, expired:number}}
+ */
+export function recoverMessages({ store, bot, log = console, windowMs = RECOVERY_WINDOW_MS, now = Date.now }) {
+  const rows = store.unprocessedMessages(windowMs);
+  const expired = rows.filter(r => !r.recent);
+  if (expired.length) {
+    const t = now();
+    store.transaction(() => { for (const r of expired) store.markProcessed(r.wa_id, t); });
+    log.warn?.(`arranque: ${expired.length} mensaje(s) sin procesar de hace más de ${windowMs / 60000} minutos; se descartan sin responder.`);
+  }
+  const fresh = rows.filter(r => r.recent);
+  for (const r of fresh) {
+    // Lo que el bot usa del mensaje: el nombre no se guarda (datos mínimos), así que el saludo va sin él.
+    const msg = { id: r.wa_id, from: r.customer, name: null, type: r.type, text: r.body ?? '' };
+    if (r.reply_id) msg.replyId = r.reply_id;
+    if (r.media_id) msg.mediaId = r.media_id;
+    bot.onMessage(msg).catch(err => log.error?.('onMessage falló al recuperar un mensaje', err));
+  }
+  return { requeued: fresh.length, expired: expired.length };
+}
+
 // Tope del apagado ordenado: docker stop espera 10 s por defecto antes de mandar SIGKILL.
 export const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -130,6 +160,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   });
   if (!env.handoffWebhookUrl) console.warn('Sin HANDOFF_WEBHOOK_URL: las derivaciones solo se ven con `npm run derivaciones`.');
   const bot = createBot({ restaurant, store, client: createClient(env), notifyHandoff, interpretAI: createInterpreter(env), aiDailyLimit: env.aiDailyLimit });
+  recoverMessages({ store, bot });
   const server = createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
   let stopping = null;

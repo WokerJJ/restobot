@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createApp, shutdown } from '../src/server.js';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { createApp, shutdown, recoverMessages, RECOVERY_WINDOW_MS } from '../src/server.js';
+import { createBot } from '../src/conversation/bot.js';
 import { openStore } from '../src/store.js';
 import { sign } from '../src/whatsapp/signature.js';
 import { parseWebhook } from '../src/whatsapp/parse.js';
@@ -166,4 +172,54 @@ test('si el bot no termina a tiempo, el apagado avisa y cierra igual (EVA-037)',
   assert.equal(await shutdown({ ...d, timeoutMs: 20 }), false);
   assert.equal(d.calls.at(-1), 'store.close');
   assert.match(d.logs[0], /tope/);
+});
+
+// Recuperación al arrancar (AUD-015): base en un archivo temporal para poder envejecer mensajes.
+// Devuelve el store abierto y la ruta; al terminar, cierra el store antes de borrar el directorio
+// (en Windows no se puede borrar una base abierta).
+function baseTemporal(t) {
+  const dir = join(tmpdir(), `restobot-${randomUUID()}`);
+  const path = join(dir, 'restobot.db');
+  const store = openStore(path);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  return { store, path };
+}
+
+test('al arrancar, un mensaje guardado sin procesar se procesa (AUD-015)', async t => {
+  const { store } = baseTemporal(t);
+  store.saveMessage({ id: 'wamid.1', from: '573001112233', type: 'text', text: 'hola' });
+  const sent = [];
+  const record = kind => async (to, body) => { sent.push({ kind, body }); return { id: `wamid.out.${sent.length}` }; };
+  const client = { sendText: record('text'), sendButtons: record('buttons'), sendList: record('list') };
+  const bot = createBot({ restaurant, store, client, log: {} });
+  assert.deepEqual(recoverMessages({ store, bot, log: {} }), { requeued: 1, expired: 0 });
+  await bot.idle();
+  assert.match(sent[0].body, /Bienvenido/);
+  assert.equal(store.getSession('573001112233').state, 'saludo');
+  assert.deepEqual(store.unprocessedMessages(RECOVERY_WINDOW_MS), []);
+  assert.deepEqual(recoverMessages({ store, bot, log: {} }), { requeued: 0, expired: 0 }, 'no se procesa dos veces');
+});
+
+test('al arrancar, se reencolan en orden y reconstruidos; los viejos se marcan sin responder (AUD-015)', async t => {
+  const { store, path } = baseTemporal(t);
+  store.saveMessage({ id: 'wamid.viejo', from: '57300', type: 'text', text: 'de hace una hora' });
+  store.saveMessage({ id: 'wamid.a', from: '57301', type: 'text', text: 'hola' });
+  store.saveMessage({ id: 'wamid.b', from: '57301', type: 'interactive', text: 'Hacer pedido', replyId: 'menu' });
+  store.saveMessage({ id: 'wamid.out', from: '57301', direction: 'out', type: 'text', text: 'respuesta' });
+  const db = new DatabaseSync(path);
+  db.exec("UPDATE messages SET created_at = datetime('now', '-1 hour') WHERE wa_id = 'wamid.viejo'");
+  db.close();
+
+  const received = [];
+  const logs = [];
+  const bot = { onMessage: async m => { received.push(m); } };
+  assert.deepEqual(recoverMessages({ store, bot, log: { warn: m => logs.push(m) } }), { requeued: 2, expired: 1 });
+  assert.deepEqual(received, [
+    { id: 'wamid.a', from: '57301', name: null, type: 'text', text: 'hola' },
+    { id: 'wamid.b', from: '57301', name: null, type: 'interactive', text: 'Hacer pedido', replyId: 'menu' }
+  ]);
+  assert.match(logs[0], /1 mensaje/);
+  assert.doesNotMatch(logs.join(' '), /57300/, 'el log no lleva teléfonos');
+  // El viejo queda marcado: no se reprocesa en el próximo arranque. Los otros dos, hasta que el bot los atienda.
+  assert.deepEqual(store.unprocessedMessages(RECOVERY_WINDOW_MS).map(r => r.wa_id), ['wamid.a', 'wamid.b']);
 });

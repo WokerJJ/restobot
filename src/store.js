@@ -54,6 +54,16 @@ export const MIGRATIONS = Object.freeze([
     INSERT INTO sqlite_sequence (name, seq) SELECT 'orders_new', seq FROM sqlite_sequence WHERE name = 'orders';
     DROP TABLE orders;
     ALTER TABLE orders_new RENAME TO orders;
+  `,
+  // v4 · mensajes procesados (AUD-015). messages servía a la vez de deduplicación y de "ya se
+  // atendió": un mensaje guardado antes de una caída quedaba sin respuesta para siempre.
+  // processed_at (ms) marca que el bot terminó; reply_id permite reconstruir un toque de botón
+  // al reencolarlo. Los mensajes anteriores ya los atendió la versión previa (o se perdieron sin
+  // remedio): se marcan con 0 para que el primer arranque no responda historia vieja.
+  `
+    ALTER TABLE messages ADD COLUMN processed_at INTEGER;
+    ALTER TABLE messages ADD COLUMN reply_id TEXT;
+    UPDATE messages SET processed_at = 0 WHERE processed_at IS NULL;
   `
 ]);
 
@@ -111,8 +121,14 @@ export function openStore(path = ':memory:') {
   migrate(db, transaction);
 
   const insertMsg = db.prepare(
-    'INSERT OR IGNORE INTO messages (wa_id, customer, direction, type, body, media_id) VALUES (?,?,?,?,?,?)'
+    'INSERT OR IGNORE INTO messages (wa_id, customer, direction, type, body, media_id, reply_id) VALUES (?,?,?,?,?,?,?)'
   );
+  const markProcessedStmt = db.prepare('UPDATE messages SET processed_at = ? WHERE wa_id = ? AND processed_at IS NULL');
+  // Entrantes sin procesar en orden de llegada (rowid); recent dice si entran en la ventana.
+  const selectUnprocessed = db.prepare(`
+    SELECT wa_id, customer, type, body, media_id, reply_id, created_at >= datetime('now', ?) AS recent
+    FROM messages WHERE direction = 'in' AND processed_at IS NULL ORDER BY rowid
+  `);
   const insertOrder = db.prepare('INSERT INTO orders (customer, data, total, status) VALUES (?,?,?,?)');
   const selectSession = db.prepare('SELECT state, data, updated_at FROM sessions WHERE customer = ?');
   const upsertSession = db.prepare(`
@@ -143,8 +159,16 @@ export function openStore(path = ':memory:') {
   return {
     // Devuelve true si el mensaje es nuevo. Meta reintenta entregas: el id evita duplicados.
     saveMessage(m) {
-      const r = insertMsg.run(m.id, m.from, m.direction || 'in', m.type, m.text ?? null, m.mediaId ?? null);
+      const r = insertMsg.run(m.id, m.from, m.direction || 'in', m.type, m.text ?? null, m.mediaId ?? null, m.replyId ?? null);
       return r.changes === 1;
+    },
+    // Devuelve true si el mensaje existía y no estaba marcado.
+    markProcessed(waId, at) {
+      return markProcessedStmt.run(at, waId).changes === 1;
+    },
+    // created_at es TEXT UTC de datetime('now'): la ventana se compara en SQL, como pendingConfirmation.
+    unprocessedMessages(withinMs) {
+      return selectUnprocessed.all(`-${Math.floor(withinMs / 1000)} seconds`);
     },
     history(customer, limit = 20) {
       return db.prepare('SELECT * FROM messages WHERE customer = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
