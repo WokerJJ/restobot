@@ -51,6 +51,32 @@ test('touchHandoff renueva una derivación, pero no reactiva una sesión ya libe
   store.close();
 });
 
+test('releaseHandoff solo libera una sesión que sigue en humano (AUD-013)', () => {
+  const store = openStore(':memory:');
+  store.saveSession('57', { state: 'humano', data: { handoffAt: 1 } }, 1);
+  assert.equal(store.releaseHandoff('57', 5), true);
+  assert.deepEqual(store.getSession('57'), { state: 'inicio', data: {}, updatedAt: 5 });
+  // El bot ya la retomó (la derivación venció): liberar no la pisa.
+  store.saveSession('58', { state: 'carrito', data: { cart: [{ itemId: 'perro', qty: 1 }] } }, 3);
+  assert.equal(store.releaseHandoff('58', 5), false);
+  assert.deepEqual(store.getSession('58'), { state: 'carrito', data: { cart: [{ itemId: 'perro', qty: 1 }] }, updatedAt: 3 });
+  assert.equal(store.releaseHandoff('59', 5), false, 'sin sesión tampoco crea una');
+  assert.equal(store.getSession('59'), null);
+  store.close();
+});
+
+test('setOrderStatus con from solo cambia el pedido si sigue en ese estado (AUD-013)', () => {
+  const store = openStore(':memory:');
+  const id = store.createOrder('57', { total: 9000, lines: [] }, 'sin_confirmar');
+  assert.equal(store.setOrderStatus(id, 'en_preparacion'), true, 'sin from, como hoy');
+  assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), false);
+  assert.equal(store.getOrder(id).status, 'en_preparacion', 'no se pisa el estado que puso el panel');
+  store.setOrderStatus(id, 'sin_confirmar');
+  assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), true);
+  assert.equal(store.getOrder(id).status, 'recibido');
+  store.close();
+});
+
 test('lista las sesiones en un estado (p. ej. derivadas a una persona)', () => {
   const store = openStore(':memory:');
   store.saveSession('57', { state: 'humano', data: { reason: 'frase' } }, 2);

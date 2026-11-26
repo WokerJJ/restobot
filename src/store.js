@@ -127,6 +127,11 @@ export function openStore(path = ':memory:') {
       data = json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.handoffAt', ?)
     WHERE customer = ? AND state = 'humano'
   `);
+  // Liberar también va condicionado al estado (AUD-013): si el bot retomó la sesión (la derivación
+  // venció) entre la lectura y la escritura, un UPSERT pisaría su carrito.
+  const releaseHandoffStmt = db.prepare(`
+    UPDATE sessions SET state = 'inicio', data = '{}', updated_at = ? WHERE customer = ? AND state = 'humano'
+  `);
   // Las derivaciones se ordenan por su inicio (data.handoffAt), no por el último mensaje:
   // quien más lleva esperando va primero aunque haya escrito hace poco. json_valid evita que
   // una fila con data corrupta haga fallar toda la consulta; sin handoffAt se usa updated_at.
@@ -153,8 +158,13 @@ export function openStore(path = ':memory:') {
       const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
       return row && { ...row, data: JSON.parse(row.data) };
     },
-    setOrderStatus(id, status) {
-      return db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id).changes === 1;
+    // Con from, solo cambia si el pedido sigue en ese estado (AUD-013): no pisa lo que otro
+    // (el panel de la fase 5) haya cambiado entretanto. Devuelve si cambió.
+    setOrderStatus(id, to, { from } = {}) {
+      const r = from === undefined
+        ? db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(to, id)
+        : db.prepare('UPDATE orders SET status = ? WHERE id = ? AND status = ?').run(to, id, from);
+      return r.changes === 1;
     },
     ordersInStatus(status) {
       return db.prepare('SELECT id, customer, total, created_at FROM orders WHERE status = ? ORDER BY id').all(status);
@@ -181,6 +191,10 @@ export function openStore(path = ':memory:') {
     // Devuelve true si la sesión seguía derivada y se renovó; false si ya la habían liberado.
     touchHandoff(customer, now, handoffAt) {
       return touchHandoffStmt.run(now, handoffAt, customer).changes === 1;
+    },
+    // Devuelve true si la sesión seguía derivada y se liberó.
+    releaseHandoff(customer, now = Date.now()) {
+      return releaseHandoffStmt.run(now, customer).changes === 1;
     },
     sessionsInState(state) {
       return selectByState.all(state).map(r => ({ customer: r.customer, data: parseSessionData(r.data) ?? {}, updatedAt: r.updated_at }));

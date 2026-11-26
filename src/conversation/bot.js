@@ -34,11 +34,12 @@ const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Se reexporta para quien ya lo importaba desde aquí.
 export { maskPhone };
 
-/** Devuelve la conversación al bot después de que una persona atendió al cliente. */
+/**
+ * Devuelve la conversación al bot después de que una persona atendió al cliente. Un solo UPDATE
+ * condicionado a 'humano' (AUD-013): nunca pisa una sesión que el bot ya retomó.
+ */
 export function releaseHandoff(store, customer, now = Date.now()) {
-  if (store.getSession(customer)?.state !== STATES.HUMANO) return false;
-  store.saveSession(customer, { state: STATES.INICIO, data: {} }, now);
-  return true;
+  return store.releaseHandoff(customer, now);
 }
 
 /**
@@ -220,7 +221,7 @@ export function createBot({
           kind: 'text',
           body: `Tu pedido #${order.id} ya quedó registrado (total ${formatCOP(order.total)}). No pudimos confirmártelo antes por un problema de conexión; no hace falta que lo vuelvas a pedir.`
         });
-        store.setOrderStatus(order.id, 'recibido');
+        store.setOrderStatus(order.id, 'recibido', { from: 'sin_confirmar' });
       }
       for (const reply of replies) await deliver(msg.from, reply);
     } catch (err) {
@@ -233,7 +234,7 @@ export function createBot({
       // aceptable, porque tras derivar el bot ya está en silencio con este cliente.
       await notified;
     }
-    if (orderId) store.setOrderStatus(orderId, 'recibido');
+    if (orderId) store.setOrderStatus(orderId, 'recibido', { from: 'sin_confirmar' });
     return result;
   }
 

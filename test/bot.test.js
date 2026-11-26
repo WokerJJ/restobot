@@ -280,6 +280,38 @@ test('una derivación antigua sin handoffAt toma updatedAt como inicio y tambié
   assert.equal(store.getSession(CLIENTE).state, 'saludo');
 });
 
+test('releaseHandoff no pisa una sesión que el bot retomó después de leerla (AUD-013)', () => {
+  const real = openStore(':memory:');
+  real.saveSession(CLIENTE, { state: 'humano', data: { handoffAt: 1 } }, 1);
+  const vieja = real.getSession(CLIENTE);
+  // Entre la lectura y la escritura, la derivación venció y el cliente siguió pidiendo.
+  real.saveSession(CLIENTE, { state: 'carrito', data: { cart: [{ itemId: 'perro', qty: 1 }] } }, 2);
+  const store = { ...real, getSession: () => vieja };
+  assert.equal(releaseHandoff(store, CLIENTE, 3), false);
+  assert.equal(real.getSession(CLIENTE).state, 'carrito', 'el carrito no se pierde');
+  real.close();
+});
+
+test('el aviso de pedido sin confirmar no pisa un estado que el panel ya cambió (AUD-013)', async () => {
+  const s = setup();
+  const id = s.store.createOrder(CLIENTE, { total: 1000, lines: [] }, 'sin_confirmar');
+  // El panel lo cambia mientras el aviso sale.
+  const sendText = s.client.sendText;
+  s.client.sendText = async (to, body) => { s.store.setOrderStatus(id, 'en_preparacion'); return sendText(to, body); };
+  await s.say('hola');
+  assert.match(s.client.sent[0].body, /Tu pedido #1 ya quedó registrado/);
+  assert.equal(s.store.getOrder(id).status, 'en_preparacion');
+});
+
+test('la confirmación de un pedido nuevo no pisa un estado que el panel ya cambió (AUD-013)', async () => {
+  const s = setup();
+  await hastaElResumen(s);
+  const sendText = s.client.sendText;
+  s.client.sendText = async (to, body) => { s.store.setOrderStatus(1, 'en_preparacion'); return sendText(to, body); };
+  await s.tap('confirm');
+  assert.equal(s.store.getOrder(1).status, 'en_preparacion');
+});
+
 test('si liberan el chat entre la lectura y la renovación, el bot responde y no lo vuelve a derivar', async () => {
   // Carrera con `npm run derivaciones -- liberar` (otro proceso): el bot leyó 'humano', pero
   // cuando va a renovar el plazo la fila ya está liberada.
