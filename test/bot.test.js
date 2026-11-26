@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { validateRestaurant } from '../src/config.js';
 import { openStore } from '../src/store.js';
 import { toIntent } from '../src/ai/claude.js';
@@ -21,8 +25,19 @@ function fakeClient({ delays = {} } = {}) {
   return { sent, sendText: record('text'), sendButtons: record('buttons'), sendList: record('list') };
 }
 
+// Un estado de la fase 5 ("en_preparacion") lo escribe otro proceso, el panel, y no está en
+// ORDER_STATUSES (AUD-016): se simula con otra conexión a la misma base, por SQL directo.
+function conPanel(t) {
+  const dir = join(tmpdir(), `restobot-${randomUUID()}`);
+  const path = join(dir, 'restobot.db');
+  const store = openStore(path);
+  const panel = new DatabaseSync(path);
+  t.after(() => { panel.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  return { store, mover: (id, status) => panel.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id) };
+}
+
 function setup(opts = {}) {
-  const store = openStore(':memory:');
+  const store = opts.store || openStore(':memory:');
   const client = opts.client || fakeClient();
   const logs = [];
   const log = { info: m => logs.push(m), warn: m => logs.push(m), error: m => logs.push(m) };
@@ -293,22 +308,24 @@ test('releaseHandoff no pisa una sesión que el bot retomó después de leerla (
   real.close();
 });
 
-test('el aviso de pedido sin confirmar no pisa un estado que el panel ya cambió (AUD-013)', async () => {
-  const s = setup({ unconfirmedGraceMs: 0 }); // sin el margen de BUG-034: el pedido cuenta ya
+test('el aviso de pedido sin confirmar no pisa un estado que el panel ya cambió (AUD-013)', async t => {
+  const { store, mover } = conPanel(t);
+  const s = setup({ store, unconfirmedGraceMs: 0 }); // sin el margen de BUG-034: el pedido cuenta ya
   const id = s.store.createOrder(CLIENTE, { total: 1000, lines: [] }, 'sin_confirmar');
   // El panel lo cambia mientras el aviso sale.
   const sendText = s.client.sendText;
-  s.client.sendText = async (to, body) => { s.store.setOrderStatus(id, 'en_preparacion'); return sendText(to, body); };
+  s.client.sendText = async (to, body) => { mover(id, 'en_preparacion'); return sendText(to, body); };
   await s.say('hola');
   assert.match(s.client.sent[0].body, /Tu pedido #1 ya quedó registrado/);
   assert.equal(s.store.getOrder(id).status, 'en_preparacion');
 });
 
-test('la confirmación de un pedido nuevo no pisa un estado que el panel ya cambió (AUD-013)', async () => {
-  const s = setup();
+test('la confirmación de un pedido nuevo no pisa un estado que el panel ya cambió (AUD-013)', async t => {
+  const { store, mover } = conPanel(t);
+  const s = setup({ store });
   await hastaElResumen(s);
   const sendText = s.client.sendText;
-  s.client.sendText = async (to, body) => { s.store.setOrderStatus(1, 'en_preparacion'); return sendText(to, body); };
+  s.client.sendText = async (to, body) => { mover(1, 'en_preparacion'); return sendText(to, body); };
   await s.tap('confirm');
   assert.equal(s.store.getOrder(1).status, 'en_preparacion');
 });

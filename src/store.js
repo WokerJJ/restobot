@@ -73,6 +73,19 @@ export const MIGRATIONS = Object.freeze([
   `
 ]);
 
+// Estados del ciclo de un pedido (AUD-016): nace sin_confirmar y pasa a recibido cuando el cliente
+// recibió la confirmación. La lista crecerá en la fase 5 (panel: en preparación, enviado...).
+// La columna aún no tiene CHECK y su valor por defecto sigue siendo 'recibido': SQLite no cambia
+// ninguno de los dos sin reconstruir orders, y eso queda para la reconstrucción de la fase 5.
+// Mientras, el control vive en createOrder y setOrderStatus.
+export const ORDER_STATUSES = Object.freeze(['sin_confirmar', 'recibido']);
+
+function checkStatus(status) {
+  if (!ORDER_STATUSES.includes(status)) {
+    throw new Error(`Estado de pedido desconocido: ${JSON.stringify(status)}. Válidos: ${ORDER_STATUSES.join(', ')}.`);
+  }
+}
+
 // Todo pedido pasa por sin_confirmar mientras se envía su confirmación, y los reintentos del
 // envío pueden alargarlo unos segundos (BUG-034). Solo cuenta como pendiente (aviso al cliente,
 // listado de `npm run derivaciones`) el que lleva más de este margen sin confirmarse.
@@ -202,7 +215,8 @@ export function openStore(path = ':memory:') {
       return db.prepare('SELECT * FROM messages WHERE customer = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
         .all(customer, limit).reverse();
     },
-    createOrder(customer, order, status = 'recibido') {
+    createOrder(customer, order, status = 'sin_confirmar') {
+      checkStatus(status);
       const r = insertOrder.run(customer, JSON.stringify(order), order.total, status);
       return Number(r.lastInsertRowid);
     },
@@ -213,6 +227,8 @@ export function openStore(path = ':memory:') {
     // Con from, solo cambia si el pedido sigue en ese estado (AUD-013): no pisa lo que otro
     // (el panel de la fase 5) haya cambiado entretanto. Devuelve si cambió.
     setOrderStatus(id, to, { from } = {}) {
+      checkStatus(to);
+      if (from !== undefined) checkStatus(from);
       const r = from === undefined
         ? db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(to, id)
         : db.prepare('UPDATE orders SET status = ? WHERE id = ? AND status = ?').run(to, id, from);

@@ -7,7 +7,7 @@ import { rmSync, mkdirSync } from 'node:fs';
 import { once } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore, MIGRATIONS, PENDING_CONFIRMATION_SQL, UNCONFIRMED_GRACE_MS } from '../src/store.js';
+import { openStore, MIGRATIONS, PENDING_CONFIRMATION_SQL, UNCONFIRMED_GRACE_MS, ORDER_STATUSES } from '../src/store.js';
 
 // Base en un archivo temporal propio (con sus -wal y -shm); se borra al terminar la prueba.
 function tempDb(t) {
@@ -65,10 +65,14 @@ test('releaseHandoff solo libera una sesión que sigue en humano (AUD-013)', () 
   store.close();
 });
 
-test('setOrderStatus con from solo cambia el pedido si sigue en ese estado (AUD-013)', () => {
-  const store = openStore(':memory:');
+test('setOrderStatus con from solo cambia el pedido si sigue en ese estado (AUD-013)', t => {
+  const path = tempDb(t);
+  const store = openStore(path);
   const id = store.createOrder('57', { total: 9000, lines: [] }, 'sin_confirmar');
-  assert.equal(store.setOrderStatus(id, 'en_preparacion'), true, 'sin from, como hoy');
+  // El panel (fase 5, otro proceso) lo pasa a un estado que este store aún no conoce (AUD-016).
+  const panel = new DatabaseSync(path);
+  panel.prepare('UPDATE orders SET status = ? WHERE id = ?').run('en_preparacion', id);
+  panel.close();
   assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), false);
   assert.equal(store.getOrder(id).status, 'en_preparacion', 'no se pisa el estado que puso el panel');
   store.setOrderStatus(id, 'sin_confirmar');
@@ -277,6 +281,22 @@ test('un pedido sin_confirmar de menos de 2 minutos aún se está confirmando: n
     assert.deepEqual(store.pendingConfirmation('57', 24 * 60 * 60 * 1000).map(o => o.id), [viejo]);
     assert.deepEqual(store.unconfirmedOrders().map(o => o.id), [viejo]);
     assert.deepEqual(store.pendingConfirmation('57', 24 * 60 * 60 * 1000, 0).map(o => o.id), [reciente, viejo], 'el margen se puede inyectar');
+  } finally {
+    store.close();
+  }
+});
+
+test('los estados de pedido se limitan a ORDER_STATUSES; un pedido nace sin_confirmar (AUD-016)', () => {
+  const store = openStore(':memory:');
+  try {
+    assert.deepEqual(ORDER_STATUSES, ['sin_confirmar', 'recibido']);
+    const id = store.createOrder('57', { total: 1000, lines: [] });
+    assert.equal(store.getOrder(id).status, 'sin_confirmar');
+    assert.throws(() => store.createOrder('57', { total: 1000, lines: [] }, 'entregado'), /Estado de pedido desconocido: "entregado"/);
+    assert.throws(() => store.setOrderStatus(id, 'cualquiera'), /Estado de pedido desconocido: "cualquiera"/);
+    assert.throws(() => store.setOrderStatus(id, 'recibido', { from: 'otro' }), /Estado de pedido desconocido: "otro"/);
+    assert.equal(store.getOrder(id).status, 'sin_confirmar');
+    assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), true);
   } finally {
     store.close();
   }
