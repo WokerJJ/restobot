@@ -148,6 +148,26 @@ test('rechazo, respuesta cortada o JSON roto cuentan como "no entendí"', async 
   assert.equal(await interp(fakeFetch({ output: { intent: null } }))(r, 'menu', msg('hola')), null);
 });
 
+test('con un bloque fallback, solo cuenta el texto del modelo de respaldo (BUG-032)', async () => {
+  const pago = { intent: { type: 'payment', payment: 'Transferencia' } };
+  // El modelo principal empezó a responder y rechazó a mitad de camino; el respaldo respondió completo.
+  const content = [
+    { type: 'thinking', thinking: '' },
+    { type: 'text', text: '{"intent": {"type": "pay' },
+    { type: 'fallback' },
+    { type: 'text', text: JSON.stringify(pago) }
+  ];
+  const raw = { stop_reason: 'end_turn', content, usage: { input_tokens: 10, output_tokens: 5 } };
+  assert.deepEqual(await interp(fakeFetch({ raw }))(r, 'pago', msg('por transferencia')), { type: 'payment', index: 1 });
+  // Si hay varios, manda el último.
+  const dos = { ...raw, content: [{ type: 'text', text: '{"a' }, { type: 'fallback' }, { type: 'text', text: '{"b' }, { type: 'fallback' }, ...content.slice(3)] };
+  assert.deepEqual(await interp(fakeFetch({ raw: dos }))(r, 'pago', msg('por transferencia')), { type: 'payment', index: 1 });
+  // Sin fallback nada cambia: se unen todos los bloques de texto.
+  const texto = JSON.stringify(pago);
+  const partido = { ...raw, content: [{ type: 'text', text: texto.slice(0, 10) }, { type: 'text', text: texto.slice(10) }] };
+  assert.deepEqual(await interp(fakeFetch({ raw: partido }))(r, 'pago', msg('por transferencia')), { type: 'payment', index: 1 });
+});
+
 test('un error de la API lanza sin exponer la clave', async () => {
   const err = await interp(fakeFetch({ status: 529, raw: { error: { type: 'overloaded_error', message: 'clave CLAVE' } } }))(r, 'menu', msg('x')).catch(e => e);
   assert.match(err.message, /529: overloaded_error/);

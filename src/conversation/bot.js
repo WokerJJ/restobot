@@ -5,6 +5,7 @@ import { step, confirmedReplies, resolveState, STATES } from './flow.js';
 import { interpret, isGreeting } from './interpret.js';
 import { formatCOP } from '../pricing.js';
 import { maskPhone } from '../privacy.js';
+import { UNCONFIRMED_GRACE_MS } from '../store.js';
 
 // Un carrito abandonado más de 3 horas se descarta y la conversación vuelve a empezar.
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
@@ -34,12 +35,19 @@ const UNCONFIRMED_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Se reexporta para quien ya lo importaba desde aquí.
 export { maskPhone };
 
-/** Devuelve la conversación al bot después de que una persona atendió al cliente. */
+/**
+ * Devuelve la conversación al bot después de que una persona atendió al cliente. Un solo UPDATE
+ * condicionado a 'humano' (AUD-013): nunca pisa una sesión que el bot ya retomó.
+ */
 export function releaseHandoff(store, customer, now = Date.now()) {
-  if (store.getSession(customer)?.state !== STATES.HUMANO) return false;
-  store.saveSession(customer, { state: STATES.INICIO, data: {} }, now);
-  return true;
+  return store.releaseHandoff(normalizePhone(customer), now);
 }
+
+/**
+ * El teléfono como lo guarda el bot (wa_id de Meta, solo dígitos). Acepta "+57 300 000 0003",
+ * tal como llega en el aviso de derivación (BUG-031).
+ */
+export const normalizePhone = phone => String(phone ?? '').replace(/\D/g, '');
 
 /**
  * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number,
@@ -56,7 +64,7 @@ export function createBot({
   sessionTtlMs = SESSION_TTL_MS, handoffTtlMs = HANDOFF_TTL_MS, handoffMaxMs = HANDOFF_MAX_MS,
   notifyHandoff = async () => false, interpretAI = null,
   aiLimitPerCustomer = AI_LIMIT_PER_CUSTOMER, aiWindowMs = AI_WINDOW_MS, aiDailyLimit = AI_DAILY_LIMIT,
-  timeZone = restaurant.timezone || 'America/Bogota'
+  timeZone = restaurant.timezone || 'America/Bogota', unconfirmedGraceMs = UNCONFIRMED_GRACE_MS
 }) {
   // Las cuentas de la IA viven en memoria: con varios procesos, cada uno lleva la suya (el tope
   // real es el configurado por el número de procesos), y un reinicio las pone en cero.
@@ -126,7 +134,13 @@ export function createBot({
       const handoffAt = session.data?.handoffAt ?? session.updatedAt;
       if (t - session.updatedAt <= handoffTtlMs && t - handoffAt <= handoffMaxMs) {
         // El bot calla, pero el mensaje renueva el plazo: la persona puede seguir atendiendo.
-        if (store.touchHandoff(msg.from, t, handoffAt)) return { state: STATES.HUMANO, silenced: true };
+        // Silenciar también es atenderlo: se marca procesado en la misma transacción (AUD-015).
+        const renewed = store.transaction(() => {
+          const ok = store.touchHandoff(msg.from, t, handoffAt);
+          if (ok) store.markProcessed(msg.id, t);
+          return ok;
+        });
+        if (renewed) return { state: STATES.HUMANO, silenced: true };
         // Otro proceso liberó el chat entre la lectura y la renovación: se sigue con lo guardado.
         session = store.getSession(msg.from);
       } else {
@@ -142,7 +156,7 @@ export function createBot({
     // Sin conversación activa, primero se avisa de los pedidos cuya confirmación no llegó,
     // para que el cliente no vuelva a pedir lo mismo.
     const unconfirmed = !session || session.state === STATES.INICIO
-      ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS)
+      ? store.pendingConfirmation(msg.from, UNCONFIRMED_WINDOW_MS, unconfirmedGraceMs)
       : [];
 
     // La IA solo recibe texto que las reglas no entienden: los botones, el audio y las frases
@@ -183,17 +197,28 @@ export function createBot({
       : result.replies;
     let orderId = null;
 
+    // El mensaje se marca procesado junto con la sesión (y el pedido) que produjo (AUD-015): si el
+    // proceso muere antes, el arranque lo reencola; si muere después, ya no, aunque la respuesta
+    // no haya salido, porque reaplicarlo sobre la sesión avanzada lo contaría dos veces (un pedido
+    // así queda en sin_confirmar y se avisa en el próximo mensaje, EVA-037).
     if (result.order) {
       // Pedido y sesión se guardan juntos: nunca queda un pedido sin cerrar la sesión ni al revés.
+      // Nace sin_confirmar y pasa a recibido solo después de enviar la confirmación (EVA-037): si
+      // el proceso muere entre el COMMIT y el envío (docker stop, kill -9, falta de memoria), no
+      // corre ningún catch, y así el próximo mensaje del cliente igual le avisa que ya pidió.
       orderId = store.transaction(() => {
-        const id = store.createOrder(msg.from, result.order);
+        const id = store.createOrder(msg.from, result.order, 'sin_confirmar');
         store.saveSession(msg.from, { state: result.state, data }, t);
+        store.markProcessed(msg.id, t);
         return id;
       });
       replies = confirmedReplies(restaurant, orderId, result.order);
       log.info?.(`pedido #${orderId} confirmado (${maskPhone(msg.from)}, total ${result.order.total})`);
     } else {
-      store.saveSession(msg.from, { state: result.state, data }, t);
+      store.transaction(() => {
+        store.saveSession(msg.from, { state: result.state, data }, t);
+        store.markProcessed(msg.id, t);
+      });
     }
 
     // El aviso al local sale en paralelo con la respuesta al cliente y nunca la bloquea.
@@ -217,26 +242,29 @@ export function createBot({
           kind: 'text',
           body: `Tu pedido #${order.id} ya quedó registrado (total ${formatCOP(order.total)}). No pudimos confirmártelo antes por un problema de conexión; no hace falta que lo vuelvas a pedir.`
         });
-        store.setOrderStatus(order.id, 'recibido');
+        store.setOrderStatus(order.id, 'recibido', { from: 'sin_confirmar' });
       }
       for (const reply of replies) await deliver(msg.from, reply);
     } catch (err) {
-      // El pedido ya está guardado pero el cliente no lo sabe: se marca para avisarle en su
-      // próximo mensaje (y para que el local lo vea en `npm run derivaciones`).
-      if (orderId) {
-        store.setOrderStatus(orderId, 'sin_confirmar');
-        log.error?.(`no se pudo confirmar el pedido #${orderId} a ${maskPhone(msg.from)}: ${err.message}`);
-      }
+      // El pedido ya está guardado (en sin_confirmar) pero el cliente no lo sabe: se le avisa en
+      // su próximo mensaje y el local lo ve en `npm run derivaciones`. Aquí solo se registra.
+      if (orderId) log.error?.(`no se pudo confirmar el pedido #${orderId} a ${maskPhone(msg.from)}: ${err.message}`);
       throw err;
     } finally {
       // Esperar el aviso puede retener la cola de este cliente hasta su timeout (5 s): es
       // aceptable, porque tras derivar el bot ya está en silencio con este cliente.
       await notified;
     }
+    if (orderId) store.setOrderStatus(orderId, 'recibido', { from: 'sin_confirmar' });
     return result;
   }
 
   return {
-    onMessage: msg => serial(msg.from, () => handle(msg))
+    onMessage: msg => serial(msg.from, () => handle(msg)),
+    // Resuelve cuando no queda ningún mensaje en proceso, incluidos los que entren mientras
+    // espera. Lo usa el apagado ordenado de server.js (EVA-037). Las colas nunca rechazan.
+    async idle() {
+      while (queues.size) await Promise.all(queues.values());
+    }
   };
 }

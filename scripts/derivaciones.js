@@ -4,7 +4,7 @@
 
 import { loadEnv } from '../src/config.js';
 import { openStore } from '../src/store.js';
-import { releaseHandoff } from '../src/conversation/bot.js';
+import { releaseHandoff, normalizePhone } from '../src/conversation/bot.js';
 import { formatCOP } from '../src/pricing.js';
 
 const [cmd = 'listar', phone] = process.argv.slice(2);
@@ -20,13 +20,16 @@ try {
       console.log(`${s.customer}  derivado desde ${fecha(s.data.handoffAt ?? s.updatedAt)} · último mensaje ${fecha(s.updatedAt)}  motivo: ${s.data.handoffReason || '-'}  carrito: ${items} producto(s)`);
     }
     // Pedidos guardados cuya confirmación no llegó al cliente: el local debe confirmarlos a mano.
-    for (const o of store.ordersInStatus('sin_confirmar')) {
+    // Los de menos de 2 minutos no salen: todavía se están confirmando (BUG-034).
+    for (const o of store.unconfirmedOrders()) {
       console.log(`Pedido #${o.id} sin confirmar al cliente: ${o.customer}  total ${formatCOP(o.total)}  creado ${o.created_at} UTC`);
     }
   } else if (cmd === 'liberar' && phone) {
-    console.log(releaseHandoff(store, phone)
-      ? `Listo: el bot vuelve a atender a ${phone}.`
-      : `${phone} no estaba derivado a una persona.`);
+    // Se acepta el número como llega en el aviso ("+57 300 000 0003"): se guarda solo con dígitos.
+    const customer = normalizePhone(phone);
+    if (releaseHandoff(store, customer)) console.log(`Listo: el bot vuelve a atender a ${customer}.`);
+    else if (!store.getSession(customer)) console.log(`No hay ningún chat con ${customer}: revisa el número.`);
+    else console.log(`${customer} no estaba derivado a una persona.`);
   } else {
     console.log('Uso: npm run derivaciones [-- liberar <teléfono>]');
     process.exitCode = 1;

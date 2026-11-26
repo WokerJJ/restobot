@@ -54,8 +54,59 @@ export const MIGRATIONS = Object.freeze([
     INSERT INTO sqlite_sequence (name, seq) SELECT 'orders_new', seq FROM sqlite_sequence WHERE name = 'orders';
     DROP TABLE orders;
     ALTER TABLE orders_new RENAME TO orders;
+  `,
+  // v4 · mensajes procesados (AUD-015). messages servía a la vez de deduplicación y de "ya se
+  // atendió": un mensaje guardado antes de una caída quedaba sin respuesta para siempre.
+  // processed_at (ms) marca que el bot terminó; reply_id permite reconstruir un toque de botón
+  // al reencolarlo. Los mensajes anteriores ya los atendió la versión previa (o se perdieron sin
+  // remedio): se marcan con 0 para que el primer arranque no responda historia vieja.
+  `
+    ALTER TABLE messages ADD COLUMN processed_at INTEGER;
+    ALTER TABLE messages ADD COLUMN reply_id TEXT;
+    UPDATE messages SET processed_at = 0 WHERE processed_at IS NULL;
+  `,
+  // v5 · índice parcial para pendingConfirmation (AUD-017), que corre con cada mensaje sin
+  // conversación activa. Solo indexa los sin_confirmar (casi ninguno), así que pesa poco; el
+  // orden (customer, id) sirve también al ORDER BY id.
+  `
+    CREATE INDEX IF NOT EXISTS idx_orders_pending ON orders(customer, id) WHERE status = 'sin_confirmar';
   `
 ]);
+
+// Estados del ciclo de un pedido (AUD-016): nace sin_confirmar y pasa a recibido cuando el cliente
+// recibió la confirmación. La lista crecerá en la fase 5 (panel: en preparación, enviado...).
+// La columna aún no tiene CHECK y su valor por defecto sigue siendo 'recibido': SQLite no cambia
+// ninguno de los dos sin reconstruir orders, y eso queda para la reconstrucción de la fase 5.
+// Mientras, el control vive en createOrder y setOrderStatus.
+export const ORDER_STATUSES = Object.freeze(['sin_confirmar', 'recibido']);
+
+function checkStatus(status) {
+  if (!ORDER_STATUSES.includes(status)) {
+    throw new Error(`Estado de pedido desconocido: ${JSON.stringify(status)}. Válidos: ${ORDER_STATUSES.join(', ')}.`);
+  }
+}
+
+// Todo pedido pasa por sin_confirmar mientras se envía su confirmación, y los reintentos del
+// envío pueden alargarlo unos segundos (BUG-034). Solo cuenta como pendiente (aviso al cliente,
+// listado de `npm run derivaciones`) el que lleva más de este margen sin confirmarse.
+export const UNCONFIRMED_GRACE_MS = 2 * 60 * 1000;
+
+// created_at es TEXT UTC de datetime('now'): las ventanas se comparan en SQL con
+// datetime('now', '-N seconds'). Esta consulta corre con cada mensaje y se exporta para probar
+// que usa idx_orders_pending (AUD-017); el listado de abajo es de la consola y recorre la tabla.
+export const PENDING_CONFIRMATION_SQL = `
+  SELECT id, total FROM orders
+  WHERE customer = ? AND status = 'sin_confirmar'
+    AND created_at >= datetime('now', ?) AND created_at <= datetime('now', ?)
+  ORDER BY id
+`;
+const UNCONFIRMED_ORDERS_SQL = `
+  SELECT id, customer, total, created_at FROM orders
+  WHERE status = 'sin_confirmar' AND created_at <= datetime('now', ?)
+  ORDER BY id
+`;
+
+const secondsAgo = ms => `-${Math.floor(ms / 1000)} seconds`;
 
 // Aplica las migraciones pendientes, una por transacción. La versión se lee dentro de la
 // transacción (BEGIN IMMEDIATE) para que dos procesos que abren la base a la vez no migren dos veces.
@@ -111,9 +162,15 @@ export function openStore(path = ':memory:') {
   migrate(db, transaction);
 
   const insertMsg = db.prepare(
-    'INSERT OR IGNORE INTO messages (wa_id, customer, direction, type, body, media_id) VALUES (?,?,?,?,?,?)'
+    'INSERT OR IGNORE INTO messages (wa_id, customer, direction, type, body, media_id, reply_id) VALUES (?,?,?,?,?,?,?)'
   );
-  const insertOrder = db.prepare('INSERT INTO orders (customer, data, total) VALUES (?,?,?)');
+  const markProcessedStmt = db.prepare('UPDATE messages SET processed_at = ? WHERE wa_id = ? AND processed_at IS NULL');
+  // Entrantes sin procesar en orden de llegada (rowid); recent dice si entran en la ventana.
+  const selectUnprocessed = db.prepare(`
+    SELECT wa_id, customer, type, body, media_id, reply_id, created_at >= datetime('now', ?) AS recent
+    FROM messages WHERE direction = 'in' AND processed_at IS NULL ORDER BY rowid
+  `);
+  const insertOrder = db.prepare('INSERT INTO orders (customer, data, total, status) VALUES (?,?,?,?)');
   const selectSession = db.prepare('SELECT state, data, updated_at FROM sessions WHERE customer = ?');
   const upsertSession = db.prepare(`
     INSERT INTO sessions (customer, state, data, updated_at) VALUES (?,?,?,?)
@@ -127,6 +184,11 @@ export function openStore(path = ':memory:') {
       data = json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.handoffAt', ?)
     WHERE customer = ? AND state = 'humano'
   `);
+  // Liberar también va condicionado al estado (AUD-013): si el bot retomó la sesión (la derivación
+  // venció) entre la lectura y la escritura, un UPSERT pisaría su carrito.
+  const releaseHandoffStmt = db.prepare(`
+    UPDATE sessions SET state = 'inicio', data = '{}', updated_at = ? WHERE customer = ? AND state = 'humano'
+  `);
   // Las derivaciones se ordenan por su inicio (data.handoffAt), no por el último mensaje:
   // quien más lleva esperando va primero aunque haya escrito hace poco. json_valid evita que
   // una fila con data corrupta haga fallar toda la consulta; sin handoffAt se usa updated_at.
@@ -138,35 +200,51 @@ export function openStore(path = ':memory:') {
   return {
     // Devuelve true si el mensaje es nuevo. Meta reintenta entregas: el id evita duplicados.
     saveMessage(m) {
-      const r = insertMsg.run(m.id, m.from, m.direction || 'in', m.type, m.text ?? null, m.mediaId ?? null);
+      const r = insertMsg.run(m.id, m.from, m.direction || 'in', m.type, m.text ?? null, m.mediaId ?? null, m.replyId ?? null);
       return r.changes === 1;
+    },
+    // Devuelve true si el mensaje existía y no estaba marcado.
+    markProcessed(waId, at) {
+      return markProcessedStmt.run(at, waId).changes === 1;
+    },
+    // created_at es TEXT UTC de datetime('now'): la ventana se compara en SQL, como pendingConfirmation.
+    unprocessedMessages(withinMs) {
+      return selectUnprocessed.all(`-${Math.floor(withinMs / 1000)} seconds`);
     },
     history(customer, limit = 20) {
       return db.prepare('SELECT * FROM messages WHERE customer = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
         .all(customer, limit).reverse();
     },
-    createOrder(customer, order) {
-      const r = insertOrder.run(customer, JSON.stringify(order), order.total);
+    createOrder(customer, order, status = 'sin_confirmar') {
+      checkStatus(status);
+      const r = insertOrder.run(customer, JSON.stringify(order), order.total, status);
       return Number(r.lastInsertRowid);
     },
     getOrder(id) {
       const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
       return row && { ...row, data: JSON.parse(row.data) };
     },
-    setOrderStatus(id, status) {
-      return db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id).changes === 1;
+    // Con from, solo cambia si el pedido sigue en ese estado (AUD-013): no pisa lo que otro
+    // (el panel de la fase 5) haya cambiado entretanto. Devuelve si cambió.
+    setOrderStatus(id, to, { from } = {}) {
+      checkStatus(to);
+      if (from !== undefined) checkStatus(from);
+      const r = from === undefined
+        ? db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(to, id)
+        : db.prepare('UPDATE orders SET status = ? WHERE id = ? AND status = ?').run(to, id, from);
+      return r.changes === 1;
     },
     ordersInStatus(status) {
       return db.prepare('SELECT id, customer, total, created_at FROM orders WHERE status = ? ORDER BY id').all(status);
     },
-    // Pedidos guardados cuya confirmación no llegó al cliente, de los últimos withinMs.
-    // created_at es TEXT UTC de datetime('now'): se compara con datetime('now', ...) en SQL.
-    pendingConfirmation(customer, withinMs) {
-      return db.prepare(`
-        SELECT id, total FROM orders
-        WHERE customer = ? AND status = 'sin_confirmar' AND created_at >= datetime('now', ?)
-        ORDER BY id
-      `).all(customer, `-${Math.floor(withinMs / 1000)} seconds`);
+    // Pedidos guardados cuya confirmación no llegó al cliente, de los últimos withinMs y con más
+    // de graceMs (BUG-034).
+    pendingConfirmation(customer, withinMs, graceMs = UNCONFIRMED_GRACE_MS) {
+      return db.prepare(PENDING_CONFIRMATION_SQL).all(customer, secondsAgo(withinMs), secondsAgo(graceMs));
+    },
+    // Todos los pedidos que el local debe confirmar a mano (`npm run derivaciones`).
+    unconfirmedOrders(graceMs = UNCONFIRMED_GRACE_MS) {
+      return db.prepare(UNCONFIRMED_ORDERS_SQL).all(secondsAgo(graceMs));
     },
     getSession(customer) {
       const row = selectSession.get(customer);
@@ -181,6 +259,10 @@ export function openStore(path = ':memory:') {
     // Devuelve true si la sesión seguía derivada y se renovó; false si ya la habían liberado.
     touchHandoff(customer, now, handoffAt) {
       return touchHandoffStmt.run(now, handoffAt, customer).changes === 1;
+    },
+    // Devuelve true si la sesión seguía derivada y se liberó.
+    releaseHandoff(customer, now = Date.now()) {
+      return releaseHandoffStmt.run(now, customer).changes === 1;
     },
     sessionsInState(state) {
       return selectByState.all(state).map(r => ({ customer: r.customer, data: parseSessionData(r.data) ?? {}, updatedAt: r.updated_at }));

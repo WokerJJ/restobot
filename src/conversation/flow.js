@@ -192,10 +192,22 @@ function guard(state, data) {
   return state;
 }
 
+// El resumen de la confirmación guarda el total que el cliente vio (quote, BUG-029): al
+// confirmar se compara con el actual, y si la carta, una tarifa o un extra cambió entretanto
+// no se cobra un total distinto del mostrado. Todo camino que muestra el resumen (go y miss,
+// los únicos que llaman a prompt) pasa por aquí. Si ya había un quote y el total cambió, el
+// resumen nuevo va con un aviso (BUG-033); sin quote previo (primera vez o sesión antigua), no.
+function quoted(restaurant, state, data) {
+  if (state !== S.CONFIRMACION) return { data, notice: [] };
+  const quote = priceCart(restaurant, data, true).total;
+  const changed = typeof data.quote === 'number' && data.quote !== quote;
+  return { data: { ...data, quote }, notice: changed ? [text('Cambiaron los precios: revisa el nuevo total.')] : [] };
+}
+
 function go(restaurant, state, data, before = []) {
-  const next = { ...data, misses: 0 };
-  const target = guard(state, next);
-  return { state: target, data: next, replies: [...before, ...prompt(restaurant, target, next)] };
+  const target = guard(state, data);
+  const { data: next, notice } = quoted(restaurant, target, { ...data, misses: 0 });
+  return { state: target, data: next, replies: [...before, ...notice, ...prompt(restaurant, target, next)] };
 }
 
 // La configuración puede cambiar entre mensajes: se descarta lo que ya no existe.
@@ -422,9 +434,15 @@ const handlers = {
   [S.CONFIRMACION](r, data, intent) {
     if (intent.type === 'edit') return go(r, S.CARRITO, data);
     if (intent.type !== 'confirm') return null;
+    const priced = priceCart(r, data, true);
+    // Sin quote (sesión anterior a BUG-029) o con otro total: se muestra el resumen actualizado.
+    if (data.quote !== priced.total) {
+      // Con el quote ya al día, go no repite el aviso: este lleva el "antes de confirmar".
+      return go(r, S.CONFIRMACION, { ...data, quote: priced.total }, [text('Cambiaron los precios: revisa el nuevo total antes de confirmar.')]);
+    }
     const zone = (r.deliveryZones || []).find(z => z.id === data.zoneId);
     const order = {
-      ...priceCart(r, data, true),
+      ...priced,
       fulfillment: data.pickup ? 'recoger' : 'domicilio',
       zone: zone ? { id: zone.id, name: zone.name } : null,
       address: data.pickup ? null : data.address,
@@ -482,11 +500,12 @@ function addressProblem(msg) {
 // why reemplaza el "no te entendí" genérico cuando se sabe qué falló; igual cuenta como fallo.
 function miss(restaurant, state, data, why = 'No te entendí 🤔. Usa las opciones de abajo, por favor.') {
   const misses = (data.misses || 0) + 1;
-  const replies = [text(why), ...prompt(restaurant, state, data)];
+  const { data: next, notice } = quoted(restaurant, state, { ...data, misses });
+  const replies = [text(why), ...notice, ...prompt(restaurant, state, next)];
   if (misses >= MISSES_BEFORE_OFFER) {
     replies.push({ kind: 'buttons', body: 'Si prefieres, te comunico con una persona del equipo.', buttons: [HUMAN_BUTTON] });
   }
-  return { state, data: { ...data, misses }, replies };
+  return { state, data: next, replies };
 }
 
 // La sesión como la ve step: un estado desconocido es INICIO y, salvo en una derivación (que no

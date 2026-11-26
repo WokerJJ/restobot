@@ -218,7 +218,12 @@ export function createClaudeInterpreter({
 
     // Un rechazo o una respuesta cortada no se interpreta: cuenta como "no entendí".
     if (json.stop_reason !== 'end_turn') return null;
-    const text = (json.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    // Con fallbacks, si el modelo principal rechaza a mitad de camino, la respuesta trae un bloque
+    // `fallback` y los bloques anteriores al último se descartan: solo vale el texto del respaldo
+    // (BUG-032). https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+    const content = Array.isArray(json.content) ? json.content : [];
+    const lastFallback = content.findLastIndex(b => b?.type === 'fallback');
+    const text = content.slice(lastFallback + 1).filter(b => b?.type === 'text').map(b => b.text).join('');
     let output;
     try { output = JSON.parse(text); } catch { return null; }
     return toIntent(restaurant, output);

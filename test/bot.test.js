@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { validateRestaurant } from '../src/config.js';
 import { openStore } from '../src/store.js';
 import { toIntent } from '../src/ai/claude.js';
@@ -21,8 +25,19 @@ function fakeClient({ delays = {} } = {}) {
   return { sent, sendText: record('text'), sendButtons: record('buttons'), sendList: record('list') };
 }
 
+// Un estado de la fase 5 ("en_preparacion") lo escribe otro proceso, el panel, y no está en
+// ORDER_STATUSES (AUD-016): se simula con otra conexión a la misma base, por SQL directo.
+function conPanel(t) {
+  const dir = join(tmpdir(), `restobot-${randomUUID()}`);
+  const path = join(dir, 'restobot.db');
+  const store = openStore(path);
+  const panel = new DatabaseSync(path);
+  t.after(() => { panel.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  return { store, mover: (id, status) => panel.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id) };
+}
+
 function setup(opts = {}) {
-  const store = openStore(':memory:');
+  const store = opts.store || openStore(':memory:');
   const client = opts.client || fakeClient();
   const logs = [];
   const log = { info: m => logs.push(m), warn: m => logs.push(m), error: m => logs.push(m) };
@@ -30,7 +45,8 @@ function setup(opts = {}) {
   const bot = createBot({
     restaurant, store, client, log, now: () => clock, notifyHandoff: opts.notifyHandoff,
     handoffTtlMs: opts.handoffTtlMs, handoffMaxMs: opts.handoffMaxMs, interpretAI: opts.interpretAI,
-    aiLimitPerCustomer: opts.aiLimitPerCustomer, aiWindowMs: opts.aiWindowMs, aiDailyLimit: opts.aiDailyLimit
+    aiLimitPerCustomer: opts.aiLimitPerCustomer, aiWindowMs: opts.aiWindowMs, aiDailyLimit: opts.aiDailyLimit,
+    unconfirmedGraceMs: opts.unconfirmedGraceMs
   });
   let seq = 0;
   const msg = (extra) => ({ id: `wamid.in.${++seq}`, from: CLIENTE, name: 'Ana', ...extra });
@@ -87,7 +103,7 @@ test('al derivar, el bot avisa una vez y luego guarda silencio hasta que lo libe
   assert.equal(client.sent.length, enviados, 'no responde mientras atiende una persona');
   assert.equal(store.sessionsInState('humano').length, 1);
 
-  assert.equal(releaseHandoff(store, CLIENTE), true);
+  assert.equal(releaseHandoff(store, '+57 300 111 2233'), true, 'acepta el teléfono con + y espacios (BUG-031)');
   assert.equal(releaseHandoff(store, CLIENTE), false);
   await say('gracias');
   assert.match(client.sent.at(-1).body, /Bienvenido/);
@@ -280,6 +296,74 @@ test('una derivación antigua sin handoffAt toma updatedAt como inicio y tambié
   assert.equal(store.getSession(CLIENTE).state, 'saludo');
 });
 
+test('releaseHandoff no pisa una sesión que el bot retomó después de leerla (AUD-013)', () => {
+  const real = openStore(':memory:');
+  real.saveSession(CLIENTE, { state: 'humano', data: { handoffAt: 1 } }, 1);
+  const vieja = real.getSession(CLIENTE);
+  // Entre la lectura y la escritura, la derivación venció y el cliente siguió pidiendo.
+  real.saveSession(CLIENTE, { state: 'carrito', data: { cart: [{ itemId: 'perro', qty: 1 }] } }, 2);
+  const store = { ...real, getSession: () => vieja };
+  assert.equal(releaseHandoff(store, CLIENTE, 3), false);
+  assert.equal(real.getSession(CLIENTE).state, 'carrito', 'el carrito no se pierde');
+  real.close();
+});
+
+test('el aviso de pedido sin confirmar no pisa un estado que el panel ya cambió (AUD-013)', async t => {
+  const { store, mover } = conPanel(t);
+  const s = setup({ store, unconfirmedGraceMs: 0 }); // sin el margen de BUG-034: el pedido cuenta ya
+  const id = s.store.createOrder(CLIENTE, { total: 1000, lines: [] }, 'sin_confirmar');
+  // El panel lo cambia mientras el aviso sale.
+  const sendText = s.client.sendText;
+  s.client.sendText = async (to, body) => { mover(id, 'en_preparacion'); return sendText(to, body); };
+  await s.say('hola');
+  assert.match(s.client.sent[0].body, /Tu pedido #1 ya quedó registrado/);
+  assert.equal(s.store.getOrder(id).status, 'en_preparacion');
+});
+
+test('la confirmación de un pedido nuevo no pisa un estado que el panel ya cambió (AUD-013)', async t => {
+  const { store, mover } = conPanel(t);
+  const s = setup({ store });
+  await hastaElResumen(s);
+  const sendText = s.client.sendText;
+  s.client.sendText = async (to, body) => { mover(1, 'en_preparacion'); return sendText(to, body); };
+  await s.tap('confirm');
+  assert.equal(s.store.getOrder(1).status, 'en_preparacion');
+});
+
+test('un mensaje atendido queda marcado como procesado, también si se silencia por derivación (AUD-015)', async () => {
+  const { store, bot, msg } = setup();
+  const entrar = m => { store.saveMessage(m); return bot.onMessage(m); };
+  const hola = msg({ type: 'text', text: 'hola' });
+  await entrar(hola);
+  assert.equal(store.history(CLIENTE).find(m => m.wa_id === hola.id).processed_at, 1_000_000);
+  await entrar(msg({ type: 'text', text: 'quiero hablar con una persona' }));
+  const callado = msg({ type: 'text', text: '¿hola?' });
+  await entrar(callado);
+  assert.equal(store.getSession(CLIENTE).state, 'humano');
+  assert.equal(store.history(CLIENTE).find(m => m.wa_id === callado.id).processed_at, 1_000_000);
+  assert.deepEqual(store.unprocessedMessages(60_000), []);
+});
+
+test('si el bot falla antes de guardar la sesión, el mensaje queda sin marcar (AUD-015)', async () => {
+  const { store, bot, msg } = setup();
+  const m = msg({ type: 'text', text: 'hola' });
+  store.saveMessage(m);
+  const roto = { ...store, getSession: () => { throw new Error('SQLITE_BUSY'); } };
+  const fallido = createBot({ restaurant, store: roto, client: fakeClient(), log: {} });
+  await assert.rejects(fallido.onMessage(m), /SQLITE_BUSY/);
+  assert.equal(store.unprocessedMessages(60_000).length, 1);
+  await bot.onMessage(m);
+  assert.equal(store.unprocessedMessages(60_000).length, 0);
+});
+
+test('un pedido que se acaba de crear y aún se confirma no dispara el aviso de pendiente (BUG-034)', async () => {
+  const { store, client, say } = setup();
+  store.createOrder(CLIENTE, { total: 1000, lines: [] }, 'sin_confirmar');
+  await say('hola');
+  assert.doesNotMatch(client.sent[0].body, /ya quedó registrado/);
+  assert.equal(store.getOrder(1).status, 'sin_confirmar', 'sigue en manos de quien lo está confirmando');
+});
+
 test('si liberan el chat entre la lectura y la renovación, el bot responde y no lo vuelve a derivar', async () => {
   // Carrera con `npm run derivaciones -- liberar` (otro proceso): el bot leyó 'humano', pero
   // cuando va a renovar el plazo la fila ya está liberada.
@@ -324,7 +408,8 @@ test('el aviso se espera aunque falle el envío del aviso de pedido sin confirma
   const client = fakeClient();
   client.sendText = async () => { throw new Error('Cloud API caída'); };
   const aviso = avisoPendiente();
-  const { store, bot, msg } = setup({ client, notifyHandoff: aviso.notifyHandoff });
+  // Sin el margen de BUG-034, para que el primer envío sea el aviso del pedido pendiente.
+  const { store, bot, msg } = setup({ client, notifyHandoff: aviso.notifyHandoff, unconfirmedGraceMs: 0 });
   store.setOrderStatus(store.createOrder(CLIENTE, { total: 1000, lines: [] }), 'sin_confirmar');
 
   const run = bot.onMessage(msg({ type: 'text', text: 'quiero hablar con un asesor' }));
@@ -335,6 +420,53 @@ test('el aviso se espera aunque falle el envío del aviso de pedido sin confirma
   await assert.rejects(run, /Cloud API caída/);
 });
 
+// Hasta el resumen con recoger en el local y pago en efectivo; el siguiente toque es Confirmar.
+async function hastaElResumen({ say, tap }) {
+  await say('hola');
+  await tap('menu');
+  await tap('item:especial');
+  await tap('qty:2');
+  await tap('cart:checkout');
+  await tap('pickup');
+  await tap('pay:0');
+}
+
+test('si el proceso muere antes de enviar la confirmación, el pedido ya está en sin_confirmar (EVA-037)', async () => {
+  const client = fakeClient();
+  const sendText = client.sendText;
+  // El envío de la confirmación nunca resuelve: equivale a morir entre el COMMIT y el envío.
+  client.sendText = (to, body) => /confirmado/.test(body) ? new Promise(() => {}) : sendText(to, body);
+  const s = setup({ client });
+  await hastaElResumen(s);
+  s.tap('confirm');
+  await vaciarCola();
+  assert.equal(s.store.getOrder(1).status, 'sin_confirmar', 'el próximo mensaje avisará del pedido');
+  assert.equal(s.store.getSession(CLIENTE).state, 'inicio');
+});
+
+test('cuando la confirmación se envía, el pedido queda en recibido (EVA-037)', async () => {
+  const s = setup();
+  await hastaElResumen(s);
+  await s.tap('confirm');
+  assert.match(s.client.sent.at(-1).body, /Pedido #1 confirmado/);
+  assert.equal(s.store.getOrder(1).status, 'recibido');
+});
+
+test('bot.idle() espera a que termine el mensaje en curso (EVA-037)', async () => {
+  let liberar;
+  const client = fakeClient();
+  client.sendButtons = async () => { await new Promise(r => { liberar = r; }); return { id: 'wamid.out.x' }; };
+  const { bot, say } = setup({ client });
+  await bot.idle(); // sin mensajes en curso resuelve enseguida
+  say('hola');
+  const p = estado(bot.idle());
+  await vaciarCola();
+  assert.equal(p.listo, false, 'no resuelve con un mensaje en vuelo');
+  liberar();
+  await vaciarCola();
+  assert.equal(p.listo, true);
+});
+
 test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente mensaje informa el pedido #1', async () => {
   const client = fakeClient();
   const sendText = client.sendText;
@@ -343,7 +475,7 @@ test('si falla la confirmación, el pedido queda sin_confirmar y el siguiente me
     if (fallar && /confirmado/.test(body)) { fallar = false; throw new Error('Cloud API caída'); }
     return sendText(to, body);
   };
-  const { store, say, tap, logs } = setup({ client });
+  const { store, say, tap, logs } = setup({ client, unconfirmedGraceMs: 0 }); // sin el margen de BUG-034
   await say('hola');
   await tap('menu');
   await tap('item:especial');

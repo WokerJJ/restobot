@@ -7,7 +7,7 @@ import { rmSync, mkdirSync } from 'node:fs';
 import { once } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore, MIGRATIONS } from '../src/store.js';
+import { openStore, MIGRATIONS, PENDING_CONFIRMATION_SQL, UNCONFIRMED_GRACE_MS, ORDER_STATUSES } from '../src/store.js';
 
 // Base en un archivo temporal propio (con sus -wal y -shm); se borra al terminar la prueba.
 function tempDb(t) {
@@ -48,6 +48,36 @@ test('touchHandoff renueva una derivación, pero no reactiva una sesión ya libe
   assert.deepEqual(store.getSession('58'), { state: 'inicio', data: {}, updatedAt: 1 });
   assert.equal(store.touchHandoff('59', 5, 1), false, 'sin sesión tampoco crea una');
   assert.equal(store.getSession('59'), null);
+  store.close();
+});
+
+test('releaseHandoff solo libera una sesión que sigue en humano (AUD-013)', () => {
+  const store = openStore(':memory:');
+  store.saveSession('57', { state: 'humano', data: { handoffAt: 1 } }, 1);
+  assert.equal(store.releaseHandoff('57', 5), true);
+  assert.deepEqual(store.getSession('57'), { state: 'inicio', data: {}, updatedAt: 5 });
+  // El bot ya la retomó (la derivación venció): liberar no la pisa.
+  store.saveSession('58', { state: 'carrito', data: { cart: [{ itemId: 'perro', qty: 1 }] } }, 3);
+  assert.equal(store.releaseHandoff('58', 5), false);
+  assert.deepEqual(store.getSession('58'), { state: 'carrito', data: { cart: [{ itemId: 'perro', qty: 1 }] }, updatedAt: 3 });
+  assert.equal(store.releaseHandoff('59', 5), false, 'sin sesión tampoco crea una');
+  assert.equal(store.getSession('59'), null);
+  store.close();
+});
+
+test('setOrderStatus con from solo cambia el pedido si sigue en ese estado (AUD-013)', t => {
+  const path = tempDb(t);
+  const store = openStore(path);
+  const id = store.createOrder('57', { total: 9000, lines: [] }, 'sin_confirmar');
+  // El panel (fase 5, otro proceso) lo pasa a un estado que este store aún no conoce (AUD-016).
+  const panel = new DatabaseSync(path);
+  panel.prepare('UPDATE orders SET status = ? WHERE id = ?').run('en_preparacion', id);
+  panel.close();
+  assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), false);
+  assert.equal(store.getOrder(id).status, 'en_preparacion', 'no se pisa el estado que puso el panel');
+  store.setOrderStatus(id, 'sin_confirmar');
+  assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), true);
+  assert.equal(store.getOrder(id).status, 'recibido');
   store.close();
 });
 
@@ -210,6 +240,77 @@ test('migra una base de la fase 1 conservando pedidos, mensajes e ids', t => {
     assert.equal(store.getSession('57').state, 'menu');
   } finally {
     store.close();
+  }
+});
+
+test('la migración de processed_at se aplica sobre una base existente sin reprocesar la historia (AUD-015)', t => {
+  const path = baseFase1(t);
+  const store = openStore(path);
+  try {
+    const columnas = (() => {
+      const db = new DatabaseSync(path);
+      try { return db.prepare('PRAGMA table_info(messages)').all().map(c => c.name); } finally { db.close(); }
+    })();
+    assert.ok(columnas.includes('processed_at') && columnas.includes('reply_id'));
+    assert.equal(store.history('57').at(-1).processed_at, 0, 'el mensaje viejo cuenta como procesado');
+    assert.deepEqual(store.unprocessedMessages(10 * 60 * 1000), []);
+    // Un mensaje nuevo nace sin procesar y guarda el id del botón.
+    store.saveMessage({ id: 'wamid.n1', from: '57', type: 'interactive', text: 'Ver menú', replyId: 'menu' });
+    const [row] = store.unprocessedMessages(10 * 60 * 1000);
+    assert.equal(row.wa_id, 'wamid.n1');
+    assert.equal(row.reply_id, 'menu');
+    assert.equal(row.recent, 1);
+    assert.equal(store.markProcessed('wamid.n1', 5), true);
+    assert.equal(store.markProcessed('wamid.n1', 6), false, 'no se marca dos veces');
+    assert.deepEqual(store.unprocessedMessages(10 * 60 * 1000), []);
+  } finally {
+    store.close();
+  }
+});
+
+test('un pedido sin_confirmar de menos de 2 minutos aún se está confirmando: no cuenta como pendiente (BUG-034)', t => {
+  assert.equal(UNCONFIRMED_GRACE_MS, 2 * 60 * 1000);
+  const path = tempDb(t);
+  const store = openStore(path);
+  try {
+    const reciente = store.createOrder('57', { total: 1000, lines: [] }, 'sin_confirmar');
+    const viejo = store.createOrder('57', { total: 2000, lines: [] }, 'sin_confirmar');
+    const db = new DatabaseSync(path);
+    db.exec(`UPDATE orders SET created_at = datetime('now', '-3 minutes') WHERE id = ${viejo}`);
+    db.close();
+    assert.deepEqual(store.pendingConfirmation('57', 24 * 60 * 60 * 1000).map(o => o.id), [viejo]);
+    assert.deepEqual(store.unconfirmedOrders().map(o => o.id), [viejo]);
+    assert.deepEqual(store.pendingConfirmation('57', 24 * 60 * 60 * 1000, 0).map(o => o.id), [reciente, viejo], 'el margen se puede inyectar');
+  } finally {
+    store.close();
+  }
+});
+
+test('los estados de pedido se limitan a ORDER_STATUSES; un pedido nace sin_confirmar (AUD-016)', () => {
+  const store = openStore(':memory:');
+  try {
+    assert.deepEqual(ORDER_STATUSES, ['sin_confirmar', 'recibido']);
+    const id = store.createOrder('57', { total: 1000, lines: [] });
+    assert.equal(store.getOrder(id).status, 'sin_confirmar');
+    assert.throws(() => store.createOrder('57', { total: 1000, lines: [] }, 'entregado'), /Estado de pedido desconocido: "entregado"/);
+    assert.throws(() => store.setOrderStatus(id, 'cualquiera'), /Estado de pedido desconocido: "cualquiera"/);
+    assert.throws(() => store.setOrderStatus(id, 'recibido', { from: 'otro' }), /Estado de pedido desconocido: "otro"/);
+    assert.equal(store.getOrder(id).status, 'sin_confirmar');
+    assert.equal(store.setOrderStatus(id, 'recibido', { from: 'sin_confirmar' }), true);
+  } finally {
+    store.close();
+  }
+});
+
+test('pendingConfirmation usa el índice parcial de pedidos sin confirmar (AUD-017)', t => {
+  const path = baseFase1(t);
+  openStore(path).close();
+  const db = new DatabaseSync(path);
+  try {
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${PENDING_CONFIRMATION_SQL}`).all('57', '-86400 seconds', '-120 seconds').map(r => r.detail).join(' | ');
+    assert.match(plan, /USING INDEX idx_orders_pending/, plan);
+  } finally {
+    db.close();
   }
 });
 
