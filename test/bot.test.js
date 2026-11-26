@@ -87,7 +87,7 @@ test('al derivar, el bot avisa una vez y luego guarda silencio hasta que lo libe
   assert.equal(client.sent.length, enviados, 'no responde mientras atiende una persona');
   assert.equal(store.sessionsInState('humano').length, 1);
 
-  assert.equal(releaseHandoff(store, CLIENTE), true);
+  assert.equal(releaseHandoff(store, '+57 300 111 2233'), true, 'acepta el teléfono con + y espacios (BUG-031)');
   assert.equal(releaseHandoff(store, CLIENTE), false);
   await say('gracias');
   assert.match(client.sent.at(-1).body, /Bienvenido/);

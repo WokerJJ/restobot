@@ -39,8 +39,14 @@ export { maskPhone };
  * condicionado a 'humano' (AUD-013): nunca pisa una sesión que el bot ya retomó.
  */
 export function releaseHandoff(store, customer, now = Date.now()) {
-  return store.releaseHandoff(customer, now);
+  return store.releaseHandoff(normalizePhone(customer), now);
 }
+
+/**
+ * El teléfono como lo guarda el bot (wa_id de Meta, solo dígitos). Acepta "+57 300 000 0003",
+ * tal como llega en el aviso de derivación (BUG-031).
+ */
+export const normalizePhone = phone => String(phone ?? '').replace(/\D/g, '');
 
 /**
  * @param {{restaurant:object, store:object, client:object, log?:object, now?:() => number,
