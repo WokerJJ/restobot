@@ -106,8 +106,9 @@ export function recoverMessages({ store, bot, log = console, windowMs = RECOVERY
   return { requeued: fresh.length, expired: expired.length };
 }
 
-// Tope del apagado ordenado: docker stop espera 10 s por defecto antes de mandar SIGKILL.
-export const SHUTDOWN_TIMEOUT_MS = 10_000;
+// Tope del apagado ordenado: docker stop manda SIGKILL a los 10 s. Con 8 s queda margen para el
+// aviso y para store.close(); con 10 s el SIGKILL llegaría antes que ambos (EVA-043).
+export const SHUTDOWN_TIMEOUT_MS = 8_000;
 
 /**
  * Apagado ordenado (EVA-037): deja de recibir webhooks, espera a que el bot termine los mensajes
@@ -120,7 +121,12 @@ export async function shutdown({ server, bot, store, log = console, timeoutMs = 
   const closed = new Promise(resolve => server.close(() => resolve()));
   // idle() se vuelve a pedir cuando el servidor cerró: una petición que estaba en curso pudo
   // encolar un mensaje después de la primera espera.
-  const drained = Promise.all([closed, bot.idle()]).then(() => bot.idle()).then(() => true);
+  // Si el bot falla (por ejemplo, una entrega que sigue después del tope y del store.close()), se
+  // registra y el apagado sigue: nunca queda un rechazo sin manejar (EVA-043).
+  const drained = Promise.all([closed, bot.idle()]).then(() => bot.idle()).then(() => true, err => {
+    log.error?.(`apagado: el bot falló mientras terminaba los mensajes en curso: ${err?.message ?? err}`);
+    return false;
+  });
   let timer;
   const expired = new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); });
   const finished = await Promise.race([drained, expired]);
@@ -128,6 +134,28 @@ export async function shutdown({ server, bot, store, log = console, timeoutMs = 
   if (!finished) log.warn?.(`apagado: se cumplió el tope de ${timeoutMs} ms con mensajes en curso; se cierra igual.`);
   store.close();
   return finished;
+}
+
+/**
+ * Manejador de SIGTERM y SIGINT (BUG-035). La primera señal hace el apagado ordenado y sale con 0,
+ * o con 1 si el apagado falla (por ejemplo, store.close()). Una segunda señal no espera: avisa y
+ * sale con 1, para que un segundo Ctrl+C sirva de salida de emergencia. exit se inyecta para probar.
+ */
+export function createSignalHandler({ server, bot, store, log = console, exit = code => process.exit(code), timeoutMs }) {
+  let stopping = null;
+  return signal => {
+    if (stopping) {
+      log.warn?.(`${signal}: segunda señal, se sale sin esperar los mensajes en curso.`);
+      exit(1);
+      return stopping;
+    }
+    log.info?.(`${signal}: apagando sin cortar los mensajes en curso...`);
+    stopping = shutdown({ server, bot, store, log, timeoutMs }).then(
+      () => exit(0),
+      err => { log.error?.(`apagado: falló el cierre (${err?.message ?? err})`); exit(1); }
+    );
+    return stopping;
+  };
 }
 
 /** Arma el cliente de envío: real si hay credenciales, de ensayo si no (nunca en producción). */
@@ -163,12 +191,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   recoverMessages({ store, bot });
   const server = createApp({ env, restaurant, store, onMessage: bot.onMessage }).listen(env.port, () =>
     console.log(`restobot escuchando en :${env.port} para "${restaurant.name}"`));
-  let stopping = null;
-  const stop = signal => {
-    if (stopping) return; // una segunda señal no repite el apagado
-    console.log(`${signal}: apagando sin cortar los mensajes en curso...`);
-    stopping = shutdown({ server, bot, store }).finally(() => process.exit(0));
-  };
+  const stop = createSignalHandler({ server, bot, store });
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }

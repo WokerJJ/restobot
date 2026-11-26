@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createApp, shutdown, recoverMessages, RECOVERY_WINDOW_MS } from '../src/server.js';
+import { createApp, shutdown, createSignalHandler, recoverMessages, RECOVERY_WINDOW_MS, SHUTDOWN_TIMEOUT_MS } from '../src/server.js';
 import { createBot } from '../src/conversation/bot.js';
 import { openStore } from '../src/store.js';
 import { sign } from '../src/whatsapp/signature.js';
@@ -172,6 +172,60 @@ test('si el bot no termina a tiempo, el apagado avisa y cierra igual (EVA-037)',
   assert.equal(await shutdown({ ...d, timeoutMs: 20 }), false);
   assert.equal(d.calls.at(-1), 'store.close');
   assert.match(d.logs[0], /tope/);
+});
+
+test('el tope del apagado deja margen antes de los 10 s de docker stop (EVA-043)', () => {
+  assert.ok(SHUTDOWN_TIMEOUT_MS < 10_000, String(SHUTDOWN_TIMEOUT_MS));
+});
+
+// Salida inyectada: registra el código en vez de terminar el proceso.
+function señales(d, extra = {}) {
+  const exits = [];
+  const stop = createSignalHandler({ ...d, exit: code => exits.push(code), timeoutMs: 50, ...extra });
+  return { exits, stop };
+}
+
+test('apagado: sale con 0 si todo cierra bien y con 1 si el cierre falla (BUG-035)', async () => {
+  const ok = dobles();
+  const a = señales(ok);
+  await a.stop('SIGTERM');
+  assert.deepEqual(a.exits, [0]);
+
+  const roto = dobles();
+  roto.store.close = () => { throw new Error('SQLITE_BUSY'); };
+  const errores = [];
+  const b = señales(roto, { log: { ...roto.log, error: m => errores.push(String(m)) } });
+  await b.stop('SIGTERM');
+  assert.deepEqual(b.exits, [1]);
+  assert.match(errores.join(' '), /SQLITE_BUSY/);
+});
+
+test('apagado: una segunda señal fuerza la salida con 1 y avisa (BUG-035)', async () => {
+  const d = dobles({ idle: new Promise(() => {}) });
+  const { exits, stop } = señales(d, { timeoutMs: 10_000 });
+  const primero = stop('SIGINT');
+  stop('SIGINT');
+  assert.deepEqual(exits, [1]);
+  assert.match(d.logs.join(' '), /segunda señal/);
+  primero.catch(() => {}); // queda esperando el tope: no se espera en la prueba
+});
+
+test('apagado: si el bot falla después del tope, se registra y no queda un rechazo sin manejar (EVA-043)', async () => {
+  let fallar;
+  const d = dobles({ idle: new Promise((_, reject) => { fallar = reject; }) });
+  const errores = [];
+  const sinManejar = [];
+  const onUnhandled = e => sinManejar.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    assert.equal(await shutdown({ ...d, log: { ...d.log, error: m => errores.push(String(m)) }, timeoutMs: 10 }), false);
+    fallar(new Error('database is not open'));
+    await new Promise(r => setTimeout(r, 20));
+    assert.deepEqual(sinManejar, []);
+    assert.match(errores.join(' '), /database is not open/);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
 });
 
 // Recuperación al arrancar (AUD-015): base en un archivo temporal para poder envejecer mensajes.
