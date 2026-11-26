@@ -19,6 +19,9 @@ export const UNKNOWN_ITEM = 'desconocido';
 // Mientras la IA responde, los mensajes siguientes del mismo cliente esperan en su cola (bot.js):
 // pasado este plazo se sigue como si no hubiera entendido.
 export const DEFAULT_TIMEOUT_MS = 8000;
+// Tope de la respuesta (incluye el pensamiento del modelo). Lo usa también el tope de costo de
+// npm run evaluar.
+export const MAX_TOKENS = 1024;
 // Modelos que admiten el respaldo del servidor cuando el modelo rechaza una solicitud.
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-2', 'claude-fable-5-1']);
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -188,7 +191,7 @@ export function createClaudeInterpreter({
       // La salida es un JSON corto. El pensamiento de Opus también cuenta para este tope: si se
       // queda corto, la respuesta llega cortada (stop_reason max_tokens) y cuenta como "no
       // entendí". Cualquier cambio se mide con `npm run evaluar -- claude`.
-      max_tokens: 1024,
+      max_tokens: MAX_TOKENS,
       // Instrucciones estables primero y en caché: solo cambia el mensaje del usuario.
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: buildUserContent(restaurant, state, data, String(msg.text ?? '')) }],

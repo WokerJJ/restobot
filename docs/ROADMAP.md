@@ -24,7 +24,7 @@ Cada fase termina con pruebas en verde y algo que se puede demostrar.
 - Cambiar una línea del carrito ("quítale la tocineta", "mejor que sean dos"): necesita una intención compuesta.
 - ✅ Intérprete con un modelo por API (`src/ai/claude.js`): salida estructurada desde la configuración, validado con `validateIntent`, solo para el texto que las reglas no entienden, y medible con `npm run evaluar -- claude` (acierto, acciones indebidas, latencia y costo).
 - Medir con la API real y elegir modelo y esfuerzo con esos números.
-- Preguntas frecuentes desde la configuración del restaurante (intención `question`).
+- ✅ Preguntas frecuentes desde la configuración del restaurante (intención `question`): horario, zonas, pagos y tiempo de entrega.
 - Evaluación con chats reales anonimizados (Ley 1581), además de los casos inventados.
 
 ## Fase 4 — Notas de voz

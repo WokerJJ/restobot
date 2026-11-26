@@ -51,6 +51,25 @@ test('valida zonas de domicilio y medios de pago', () => {
   assert.throws(() => validateRestaurant({ ...base, payments: [] }), /pago/);
 });
 
+test('etaMinutes falta o es [mínimo, máximo] en minutos enteros (BUG-027)', () => {
+  const base = { name: 'x', menu: [{ id: 'a', price: 1000 }], payments: ['Efectivo'] };
+  assert.doesNotThrow(() => validateRestaurant(base));
+  assert.doesNotThrow(() => validateRestaurant({ ...base, etaMinutes: [25, 35] }));
+  assert.doesNotThrow(() => validateRestaurant({ ...base, etaMinutes: [30, 30] }));
+  for (const eta of [[], [30], [40, 20], [1.5, 3], [0, 10], [10, 601], [10, 20, 30], '25-35', null]) {
+    assert.throws(() => validateRestaurant({ ...base, etaMinutes: eta }), /etaMinutes/, JSON.stringify(eta));
+  }
+});
+
+test('los nombres de zona y de medio de pago tienen un largo máximo (BUG-028)', () => {
+  const base = { name: 'x', menu: [{ id: 'a', price: 1000 }], payments: ['Efectivo'] };
+  const zone = name => ({ ...base, deliveryZones: [{ id: 'z', name, fee: 1000 }] });
+  assert.doesNotThrow(() => validateRestaurant(zone('z'.repeat(60))));
+  assert.throws(() => validateRestaurant(zone('z'.repeat(61))), /zona/);
+  assert.doesNotThrow(() => validateRestaurant({ ...base, payments: ['p'.repeat(40)] }));
+  assert.throws(() => validateRestaurant({ ...base, payments: ['p'.repeat(41)] }), /pago/);
+});
+
 test('cada producto declara qué extras admite, y deben existir', () => {
   const base = { name: 'x', payments: ['Efectivo'], extras: [{ id: 'queso', name: 'Queso', price: 2000 }] };
   assert.doesNotThrow(() => validateRestaurant({ ...base, menu: [{ id: 'a', price: 1000, extras: ['queso'] }, { id: 'b', price: 1000 }] }));

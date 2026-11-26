@@ -3,6 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { validateRestaurant } from '../src/config.js';
 import { loadCases, checkCase, matches, evaluate, IRREVERSIBLE } from '../eval/grade.js';
 import { interpret } from '../src/conversation/interpret.js';
@@ -173,4 +175,64 @@ test('el costo se informa medido y en el peor caso, sin caché (EVA-029)', async
   assert.ok(Math.abs(c.worstCasePerCallUsd - 2.2) < 1e-9);
   assert.deepEqual(estimateCost(usage, undefined),
     { costUsd: null, costPerCallUsd: null, worstCaseUsd: null, worstCasePerCallUsd: null }, 'sin precio conocido');
+});
+
+test('el costo máximo de una corrida es un techo: prompt como escritura en caché y respuesta completa', async () => {
+  const { maxRunCost, PRICES } = await import('../eval/cost.js');
+  // 10 llamadas, prompt de 2500 caracteres (1000 tokens), respuesta de 1000 tokens, Opus 5.5:
+  // 10 × (1000 × 4 × 1,25 + 1000 × 20) / 1e6 = 0,25
+  assert.equal(maxRunCost({ calls: 10, promptChars: 2500, maxTokens: 1000 }, PRICES['claude-opus-5-5']), 0.25);
+  assert.equal(maxRunCost({ calls: 10, promptChars: 2500, maxTokens: 1000 }, undefined), null, 'sin precio no inventa un número');
+  assert.ok(maxRunCost({ calls: 72, promptChars: 6000, maxTokens: 1024 }, PRICES['claude-haiku-5-5']) < 0.1);
+});
+
+test('el prompt del techo incluye el esquema de salida y el mensaje más largo (EVA-034, BUG-026)', async () => {
+  const { promptCharsFor } = await import('../eval/cost.js');
+  const { buildSystemPrompt, buildSchema } = await import('../src/ai/claude.js');
+  const chars = promptCharsFor(r, cases);
+  // El esquema viaja en cada llamada y mide casi lo mismo que las instrucciones.
+  assert.ok(JSON.stringify(buildSchema(r)).length > 3000);
+  assert.ok(chars > buildSystemPrompt(r).length + 3000, `${chars} caracteres no incluyen el esquema`);
+});
+
+test('el costo máximo no queda por debajo del peor caso con un prompt denso (EVA-034, BUG-026)', async () => {
+  const { promptCharsFor, maxRunCost, estimateCost, PRICES } = await import('../eval/cost.js');
+  const { MAX_TOKENS } = await import('../src/ai/claude.js');
+  const promptChars = promptCharsFor(r, cases);
+  const calls = cases.length;
+  // Un prompt de JSON con mucha puntuación rinde unos 2,5 caracteres por token; cada respuesta usa todo max_tokens.
+  const promptTokens = Math.ceil(promptChars / 2.5);
+  const usage = { input: calls * promptTokens, cacheWrite: 0, cacheRead: 0, output: calls * MAX_TOKENS, calls };
+  for (const model of Object.keys(PRICES)) {
+    const max = maxRunCost({ calls, promptChars, maxTokens: MAX_TOKENS }, PRICES[model]);
+    const worst = estimateCost(usage, PRICES[model]).worstCaseUsd;
+    assert.ok(max >= worst, `${model}: techo US$${max} < peor caso US$${worst}`);
+  }
+});
+
+test('candado de gasto: sin --confirmar el plan no se confirma y muestra el techo (EVA-036)', async () => {
+  const { planClaudeRun } = await import('../eval/plan.js');
+  const env = { aiModel: 'claude-opus-5-5', aiEffort: 'low' };
+  const plan = planClaudeRun({ args: ['claude'], env, restaurant: r, cases });
+  assert.equal(plan.confirmed, false);
+  assert.equal(plan.model, 'claude-opus-5-5');
+  assert.equal(plan.effort, 'low');
+  assert.equal(plan.calls, cases.length);
+  assert.ok(plan.maxUsd > 0);
+
+  const confirmed = planClaudeRun({ args: ['claude', '--modelo', 'claude-haiku-5-5', '--esfuerzo', 'medium', '--confirmar'], env, restaurant: r, cases });
+  assert.equal(confirmed.confirmed, true);
+  assert.equal(confirmed.model, 'claude-haiku-5-5');
+  assert.equal(confirmed.effort, 'medium');
+  assert.equal(planClaudeRun({ args: ['claude', '--modelo', 'claude-x'], env, restaurant: r, cases }).maxUsd, null, 'sin precio no inventa un número');
+});
+
+test('candado de gasto: el script sin --confirmar termina sin clave y sin llamar a la API (EVA-036)', () => {
+  // Con la clave vacía, si el candado no detuviera la corrida el script saldría con código 1
+  // ("Falta ANTHROPIC_API_KEY") antes de crear el intérprete: nunca llega a la red.
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const env = { ...process.env, ANTHROPIC_API_KEY: '', AI_MODEL: '', AI_EFFORT: '' };
+  const run = spawnSync(process.execPath, ['scripts/evaluar.js', 'claude'], { cwd: root, env, encoding: 'utf8', timeout: 20_000 });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Costo máximo/);
 });

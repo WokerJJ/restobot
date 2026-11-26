@@ -701,3 +701,71 @@ describe('acciones irreversibles que decide la IA piden un toque (BUG-024)', () 
     }
   });
 });
+
+describe('preguntas frecuentes (question)', () => {
+  const ask = (state, topic, data = {}) =>
+    step(r, state === S.INICIO ? null : ses(state, data), txt('x'), { intent: { type: 'question', topic } });
+
+  test('cada tema se responde con la configuración del restaurante', () => {
+    assert.match(bodies(ask(S.MENU, 'horario')), /Nuestro horario: Lunes a domingo, 5:00 p\. m\. a 10:00 p\. m\./);
+    const zonas = bodies(ask(S.MENU, 'zonas'));
+    assert.match(zonas, /Centro: \$\s?3\.000/);
+    assert.match(zonas, /Barrios del norte: \$\s?5\.000/);
+    assert.match(zonas, /recoger/);
+    assert.match(bodies(ask(S.MENU, 'pagos')), /Recibimos: Efectivo, Transferencia\./);
+    assert.match(bodies(ask(S.MENU, 'tiempo')), /entre 25 y 35 minutos/);
+  });
+
+  test('se responde y se vuelve a mostrar el paso, sin tocar el pedido ni contar un fallo', () => {
+    const datos = { cart: [{ itemId: 'perro', qty: 2 }], zoneId: 'centro', address: 'Calle 1 # 2-3', payment: 'Efectivo', misses: 1 };
+    const res = ask(S.CONFIRMACION, 'tiempo', datos);
+    assert.equal(res.state, S.CONFIRMACION);
+    assert.equal(res.order, undefined, 'una pregunta nunca confirma');
+    assert.deepEqual(res.data.cart, datos.cart);
+    assert.equal(res.data.misses, 0);
+    assert.match(res.replies[0].body, /minutos/);
+    assert.deepEqual(ids(res).filter(id => id === 'confirm'), ['confirm'], 'el resumen vuelve con su botón');
+  });
+
+  test('como primer mensaje, responde y saluda', () => {
+    const res = ask(S.INICIO, 'pagos');
+    assert.equal(res.state, S.SALUDO);
+    assert.match(res.replies[0].body, /Recibimos/);
+    assert.match(bodies(res), /Bienvenido/);
+  });
+
+  test('como primer mensaje, no repite el horario ni el botón de persona (EVA-035)', () => {
+    const veces = (s, re) => (s.match(re) || []).length;
+    const horario = ask(S.INICIO, 'horario');
+    assert.equal(horario.state, S.SALUDO);
+    assert.equal(veces(bodies(horario), /horario/gi), 1, 'el saludo ya trae el horario');
+    assert.equal(ids(horario).filter(id => id === 'human').length, 1);
+
+    const sin = validateRestaurant({ ...r, hours: undefined, etaMinutes: undefined });
+    for (const [rest, topic] of [[r, 'otro'], [sin, 'horario'], [sin, 'tiempo']]) {
+      const res = step(rest, null, txt('x'), { intent: { type: 'question', topic } });
+      assert.equal(res.state, S.SALUDO, topic);
+      assert.match(res.replies[0].body, /^No tengo esa información a la mano\.$/, topic);
+      assert.equal(ids(res).filter(id => id === 'human').length, 1, `${topic}: el saludo ya ofrece una persona`);
+      assert.match(bodies(res), /Bienvenido/, topic);
+    }
+  });
+
+  test('si falta el dato o el tema es otro, lo dice y ofrece una persona sin derivar', () => {
+    const sin = validateRestaurant({ ...r, hours: undefined, etaMinutes: undefined, deliveryZones: [] });
+    const step2 = topic => step(sin, ses(S.MENU), txt('x'), { intent: { type: 'question', topic } });
+    for (const topic of ['horario', 'tiempo', 'otro']) {
+      const res = step2(topic);
+      assert.equal(res.state, S.MENU, topic);
+      assert.match(bodies(res), /No tengo esa información/, topic);
+      assert.ok(ids(res).includes('human'), topic);
+      assert.equal(res.handoff, undefined);
+    }
+    assert.match(bodies(step2('zonas')), /no hacemos domicilios/);
+  });
+
+  test('las reglas nunca producen question: sin IA, una pregunta sigue siendo "no entendí"', () => {
+    const res = step(r, ses(S.MENU), txt('a qué hora cierran?'));
+    assert.match(bodies(res), /No te entendí/);
+  });
+});
