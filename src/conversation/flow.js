@@ -192,9 +192,16 @@ function guard(state, data) {
   return state;
 }
 
+// El resumen de la confirmación guarda el total que el cliente vio (quote, BUG-029): al
+// confirmar se compara con el actual, y si la carta, una tarifa o un extra cambió entretanto
+// no se cobra un total distinto del mostrado. Todo camino que muestra el resumen (go y miss,
+// los únicos que llaman a prompt) pasa por aquí.
+const quoted = (restaurant, state, data) =>
+  state === S.CONFIRMACION ? { ...data, quote: priceCart(restaurant, data, true).total } : data;
+
 function go(restaurant, state, data, before = []) {
-  const next = { ...data, misses: 0 };
-  const target = guard(state, next);
+  const target = guard(state, data);
+  const next = quoted(restaurant, target, { ...data, misses: 0 });
   return { state: target, data: next, replies: [...before, ...prompt(restaurant, target, next)] };
 }
 
@@ -422,9 +429,14 @@ const handlers = {
   [S.CONFIRMACION](r, data, intent) {
     if (intent.type === 'edit') return go(r, S.CARRITO, data);
     if (intent.type !== 'confirm') return null;
+    const priced = priceCart(r, data, true);
+    // Sin quote (sesión anterior a BUG-029) o con otro total: se muestra el resumen actualizado.
+    if (data.quote !== priced.total) {
+      return go(r, S.CONFIRMACION, data, [text('Cambiaron los precios: revisa el nuevo total antes de confirmar.')]);
+    }
     const zone = (r.deliveryZones || []).find(z => z.id === data.zoneId);
     const order = {
-      ...priceCart(r, data, true),
+      ...priced,
       fulfillment: data.pickup ? 'recoger' : 'domicilio',
       zone: zone ? { id: zone.id, name: zone.name } : null,
       address: data.pickup ? null : data.address,
@@ -486,7 +498,7 @@ function miss(restaurant, state, data, why = 'No te entendí 🤔. Usa las opcio
   if (misses >= MISSES_BEFORE_OFFER) {
     replies.push({ kind: 'buttons', body: 'Si prefieres, te comunico con una persona del equipo.', buttons: [HUMAN_BUTTON] });
   }
-  return { state, data: { ...data, misses }, replies };
+  return { state, data: quoted(restaurant, state, { ...data, misses }), replies };
 }
 
 // La sesión como la ve step: un estado desconocido es INICIO y, salvo en una derivación (que no

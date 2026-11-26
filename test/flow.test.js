@@ -151,7 +151,7 @@ describe('entrega, pago y confirmación', () => {
   });
 
   test('confirmar devuelve el pedido calculado por pricing y reinicia la sesión', () => {
-    const res = step(r, conCarrito(S.CONFIRMACION, { zoneId: 'centro', address: 'Calle 1 # 2-3', payment: 'Efectivo' }), btn('confirm'));
+    const res = step(r, conCarrito(S.CONFIRMACION, { zoneId: 'centro', address: 'Calle 1 # 2-3', payment: 'Efectivo', quote: 29000 }), btn('confirm'));
     assert.equal(res.state, S.INICIO);
     assert.deepEqual(res.data, {});
     assert.equal(res.order.subtotal, 26000);
@@ -163,8 +163,61 @@ describe('entrega, pago y confirmación', () => {
     assert.match(msg.body, /Pedido #7 confirmado.*\$\s?29\.000 \(Efectivo\).*25–35 minutos/s);
   });
 
+  test('si el precio cambia entre el resumen y Confirmar, no confirma y muestra el nuevo total (BUG-029)', () => {
+    const resumen = step(r, conCarrito(S.PAGO, { zoneId: 'centro', address: 'Calle 1 # 2-3' }), btn('pay:0'));
+    assert.equal(resumen.data.quote, 29000, 'el resumen guarda el total que mostró');
+    // El local edita la carta y reinicia entre el resumen y el toque de Confirmar.
+    const caro = validateRestaurant({ ...r, menu: r.menu.map(m => m.id === 'especial' ? { ...m, price: 20000 } : m) });
+    const res = step(caro, resumen, btn('confirm'));
+    assert.equal(res.order, undefined);
+    assert.equal(res.state, S.CONFIRMACION);
+    assert.equal(res.replies[0].body, 'Cambiaron los precios: revisa el nuevo total antes de confirmar.');
+    assert.match(bodies(res), /Total: \$\s?43\.000/);
+    assert.ok(ids(res).includes('confirm'), 'se pide confirmar de nuevo');
+    assert.equal(res.data.quote, 43000);
+    assert.equal(step(caro, res, btn('confirm')).order.total, 43000, 'con el total nuevo a la vista, sí confirma');
+    // También si cambia la tarifa de la zona.
+    const zonaCara = validateRestaurant({ ...r, deliveryZones: r.deliveryZones.map(z => ({ ...z, fee: z.fee + 1000 })) });
+    const zona = step(zonaCara, resumen, btn('confirm'));
+    assert.equal(zona.order, undefined);
+    assert.match(bodies(zona), /Total: \$\s?30\.000/);
+  });
+
+  test('con el mismo precio, confirma (BUG-029)', () => {
+    const resumen = step(r, conCarrito(S.PAGO, { pickup: true }), btn('pay:0'));
+    const res = step(r, resumen, btn('confirm'));
+    assert.equal(res.state, S.INICIO);
+    assert.equal(res.order.total, resumen.data.quote);
+    assert.equal(res.order.total, 26000);
+  });
+
+  test('una sesión antigua sin quote muestra el resumen en vez de confirmar (BUG-029)', () => {
+    const res = step(r, conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' }), btn('confirm'));
+    assert.equal(res.order, undefined);
+    assert.equal(res.state, S.CONFIRMACION);
+    assert.equal(res.replies[0].body, 'Cambiaron los precios: revisa el nuevo total antes de confirmar.');
+    assert.match(bodies(res), /Total: \$\s?26\.000/);
+    assert.equal(res.data.quote, 26000);
+    assert.ok(step(r, res, btn('confirm')).order);
+  });
+
+  test('todo camino que vuelve a mostrar el resumen deja quote con el total mostrado (BUG-029)', () => {
+    const vieja = conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo', quote: 1 });
+    const caminos = {
+      pregunta: step(r, vieja, txt('x'), { intent: { type: 'question', topic: 'tiempo' } }),
+      'no entendí': step(r, vieja, txt('asdf qwer')),
+      'confirm de la IA': step(r, vieja, txt('x'), { intent: { type: 'confirm' } }),
+      'cambio de carta': step(r, ses(S.CONFIRMACION, { cart: [{ itemId: 'borrado', qty: 1 }, { itemId: 'especial', qty: 2 }], pickup: true, payment: 'Efectivo', quote: 1 }), btn('confirm'))
+    };
+    for (const [camino, res] of Object.entries(caminos)) {
+      assert.equal(res.state, S.CONFIRMACION, camino);
+      assert.match(bodies(res), /Total: \$\s?26\.000/, camino);
+      assert.equal(res.data.quote, 26000, camino);
+    }
+  });
+
   test('recoger en el local no cobra domicilio', () => {
-    const res = step(r, conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' }), txt('sí'));
+    const res = step(r, conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo', quote: 26000 }), txt('sí'));
     assert.equal(res.order.delivery, 0);
     assert.equal(res.order.fulfillment, 'recoger');
     assert.equal(res.order.address, null);
@@ -639,7 +692,7 @@ describe('remove_item por línea (EVA-021)', () => {
 
 describe('acciones irreversibles que decide la IA piden un toque (BUG-024)', () => {
   const ia = (session, intent) => step(r, session, txt('x'), { intent });
-  const confirmacion = conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo' });
+  const confirmacion = conCarrito(S.CONFIRMACION, { pickup: true, payment: 'Efectivo', quote: 26000 });
 
   test('confirm de la IA no crea el pedido: muestra el resumen con el botón; el botón sí confirma', () => {
     const res = ia({ ...confirmacion, data: { ...confirmacion.data, misses: 1 } }, { type: 'confirm' });
